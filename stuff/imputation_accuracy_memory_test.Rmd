@@ -53,10 +53,33 @@ knitr::opts_chunk$set(echo = TRUE, cache=TRUE, autodep=TRUE,
 
 Contents of `launcher.sh`:
 ```{r cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
+Rscript --no-restore prepare.R $1 $2 $3 $4
 Rscript --no-restore test.R $1 $2 $3 $4 &
 pid=$!
-./cpumemlog.sh -o=$5 -t=1
+./cpumemlog.sh $pid -o=$5 -t=1
 wait
+```
+
+Contents of `prepare.R`:
+```{r cache=FALSE,engine='cat',engine.opts=list(file='prepare.R',lang='R')}
+library(Siccuracy)
+
+args <- commandArgs(TRUE)
+n <- as.integer(args[1])
+m <- as.integer(args[2])
+fast <- as.logical(args[3])
+standardized <- as.logical(args[4])
+
+true <- Siccuracy:::make.true(n, m)
+impu <- Siccuracy:::make.imputed(true)
+
+fn1 <- 'true.txt'
+fn2 <- 'impu.txt'
+
+unlink(c(fn1,fn2))
+
+write.snps(true, fn1)
+write.snps(impu, fn1)
 ```
 
 Contents of `test.R`:
@@ -70,8 +93,7 @@ m <- as.integer(args[2])
 fast <- as.logical(args[3])
 standardized <- as.logical(args[4])
 
-ts <- Siccuracy:::make.test(n, m)
-res <- imputation_accuracy(n=n, m=m, fast = fast, standardized = standardized)
+res <- imputation_accuracy('true.txt','impu.txt', fast = fast, standardized = standardized)
 ```
 
 ```{r cache=FALSE}
@@ -86,11 +108,14 @@ launch <- function(n, m, fast, standardized, fn=NULL) {
   if (st != 0) return(NULL)
   fn
 }
+
+ns <- c(100, 500, 1000, 2000, 5000, 1e5, 5e5, 1e6)
+ms <- c(1000, 2000, 5000, 1e5, 5e5, 1e6)
 ```
 
 ## Non-fast, no standardisation
 
-```{r nofast_nostandard,eval=$TASKID==0}
+```{r nofast_nostandard,eval=TASKID==0|TASKID==1}
 for (n in c(10,100,500,1000,2000,5000)) {
   for (m in c(100,1000,2000,5000,8000,10000)) {
     launch(n, m, fast=FALSE, standardized=FALSE)
