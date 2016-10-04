@@ -55,7 +55,7 @@ Contents of `launcher.sh`:
 ```{r cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
 Rscript --no-restore test.R $1 $2 $3 $4 &
 pid=$!
-cpumemlog.sh -o=$5
+./cpumemlog.sh -o=$5 -t=1
 wait
 ```
 
@@ -65,8 +65,8 @@ Contents of `test.R`:
 library(Siccuracy)
 
 args <- commandArgs(TRUE)
-n <- args[1]
-m <- args[2]
+n <- as.integer(args[1])
+m <- as.integer(args[2])
 fast <- as.logical(args[3])
 standardized <- as.logical(args[4])
 
@@ -82,11 +82,21 @@ launch <- function(n, m, fast, standardized, fn=NULL) {
   fast <- as.character(fast)
   standardized <- as.character(standardized)
   if (is.null(fn)) fn <- .results(paste0(paste('cpumemlog',n,m,fast,standardized,sep='_'), '.txt'))
-  system2('./launcher.sh', args=c(n,m,fast,standardized,fn))
+  st <- system2('./launcher.sh', args=c(n,m,fast,standardized,fn), env=paste0('R_LIBS=', paste(.libPaths(), collapse=':')))
+  if (st != 0) return(NULL)
+  fn
 }
 ```
 
-## Fast method, no standardisation
+## Non-fast, no standardisation
+
+```{r nofast_nostandard,eval=$TASKID==0}
+for (n in c(10,100,500,1000,2000,5000)) {
+  for (m in c(100,1000,2000,5000,8000,10000)) {
+    launch(n, m, fast=FALSE, standardized=FALSE)
+  }
+}
+```
 
 
 # Code preamble
