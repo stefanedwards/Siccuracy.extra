@@ -1,0 +1,96 @@
+---
+title: "Test run time and memory usage of imputation accuracy"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+author: "Stefan McKinnon Hoj-Edwards"
+output: 
+  html_document: 
+    theme: spacelab
+    toc: yes
+    toc_float: true
+---
+
+This vignette is for testing memory performance of Siccuracy's `imputation_accuracy` function using 
+`fast=TRUE` and `fast=FALSE`. When `fast=TRUE`, neither matrix is stored in memory, whereas when `fast=FALSE`,
+the true genotype file is stored in memory for matching row IDs.
+
+Further more, using `standardization=TRUE` forces the methods to read the true genotype file *twice* in order to calculate means and standard deviations of true genotypes.
+
+In order to estimate memory usage, the calculation is launched in a subprocess, while using Gregor Gorjanc's [cpumemlog](https://github.com/gregorgorjanc/cpumemlog) to monitor the usage of the subprocess.
+
+```{r setup, include=FALSE}
+library(Siccuracy)
+
+BASEDIR <- getwd()
+TMPDIR <- Sys.getenv('TMPDIR',tempdir())
+TASKID <- Sys.getenv('SGE_TASK_ID', 'undefined')
+suppressWarnings(TASKID <- as.integer(TASKID))
+if (is.na(TASKID)) TASKID <- 0
+
+.dot <- function(x) {
+  f <- function(..., relative=FALSE) {
+    if (relative) {
+      file.path(file.path(x, c(...)))
+    } else {
+      file.path(BASEDIR, x, c(...))
+    }
+  } 
+  null <- dir.create(f(''), FALSE, TRUE)
+  return(f)
+}
+.cached <- .dot('cache_imputation_accuracy_memory_test')
+.results <- .dot('imputation_accuracy_memory_test_results')
+
+knitr::opts_knit$set(root.dir=TMPDIR)
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE, autodep=TRUE, 
+                      cache.path = .cached('/'), 
+                      fig.path = .results('/', relative=TRUE), 
+                      fig.width=10, fig.height=7)
+
+
+```
+
+# Templates and preparation
+
+Contents of `launcher.sh`:
+```{r cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
+Rscript --no-restore test.R $1 $2 $3 $4 &
+pid=$!
+cpumemlog.sh -o=$5
+wait
+```
+
+Contents of `test.R`:
+
+```{r cache=FALSE,engine='cat',engine.opts=list(file='test.R',lang='R')}
+library(Siccuracy)
+
+args <- commandArgs(TRUE)
+n <- args[1]
+m <- args[2]
+fast <- as.logical(args[3])
+standardized <- as.logical(args[4])
+
+ts <- Siccuracy:::make.test(n, m)
+res <- imputation_accuracy(n=n, m=m, fast = fast, standardized = standardized)
+```
+
+```{r cache=FALSE}
+file.copy(file.path(BASEDIR, '../tools/cpumemlog/cpumemlog.sh'), TMPDIR, overwrite = TRUE)
+system2('chmod', c('u+x', 'cpumemlog.sh','launcher.sh'))
+
+launch <- function(n, m, fast, standardized, fn=NULL) {
+  fast <- as.character(fast)
+  standardized <- as.character(standardized)
+  if (is.null(fn)) fn <- .results(paste0(paste('cpumemlog',n,m,fast,standardized,sep='_'), '.txt'))
+  system2('./launcher.sh', args=c(n,m,fast,standardized,fn))
+}
+```
+
+## Fast method, no standardisation
+
+
+# Code preamble
+
+The following code block is executed in the very beginning of the script.
+```{r setup,eval=FALSE}
+```
