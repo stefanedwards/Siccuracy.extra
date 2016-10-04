@@ -19,6 +19,9 @@ In order to estimate memory usage, the calculation is launched in a subprocess, 
 
 ```{r setup, include=FALSE}
 library(Siccuracy)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
 
 BASEDIR <- getwd()
 TMPDIR <- Sys.getenv('TMPDIR',tempdir())
@@ -41,7 +44,7 @@ if (is.na(TASKID)) TASKID <- 0
 .results <- .dot('imputation_accuracy_memory_test_results')
 
 knitr::opts_knit$set(root.dir=TMPDIR)
-knitr::opts_chunk$set(echo = TRUE, cache=TRUE, autodep=TRUE, 
+knitr::opts_chunk$set(echo = TRUE, cache=FALSE, autodep=TRUE, 
                       cache.path = .cached('/'), 
                       fig.path = .results('/', relative=TRUE), 
                       fig.width=10, fig.height=7)
@@ -79,7 +82,7 @@ fn2 <- 'impu.txt'
 unlink(c(fn1,fn2))
 
 write.snps(true, fn1)
-write.snps(impu, fn1)
+write.snps(impu, fn2)
 ```
 
 Contents of `test.R`:
@@ -116,13 +119,59 @@ ms <- c(1000, 2000, 5000, 1e5, 5e5, 1e6)
 ## Non-fast, no standardisation
 
 ```{r nofast_nostandard,eval=TASKID==0|TASKID==1}
-for (n in c(10,100,500,1000,2000,5000)) {
-  for (m in c(100,1000,2000,5000,8000,10000)) {
+for (n in ns) {
+  for (m in ms) {
     launch(n, m, fast=FALSE, standardized=FALSE)
   }
 }
 ```
 
+## Fast, no standardisation
+
+```{r fast_nostandard,eval=TASKID==0|TASKID==2}
+for (n in ns) {
+  for (m in ms) {
+    launch(n, m, fast=TRUE, standardized=FALSE)
+  }
+}
+```
+
+## Non-fast, with standardisation
+
+```{r nofast_standard,eval=TASKID==0|TASKID==3}
+for (n in ns) {
+  for (m in ms) {
+    launch(n, m, fast=FALSE, standardized=TRUE)
+  }
+}
+```
+
+## Fast, with standardisation
+
+```{r fast_nostandard,eval=TASKID==0|TASKID==4}
+for (n in ns) {
+  for (m in ms) {
+    launch(n, m, fast=TRUE, standardized=TRUE)
+  }
+}
+```
+
+# Summary
+
+```{r cache=FALSE}
+results <- list.files(.results('/'), pattern = 'cpumemlog.*.txt', full.names = TRUE) %>%
+  lapply(function(s) read.table(s, header=TRUE, as.is=TRUE) %>% mutate(fn=basename(s))) %>%
+  do.call(what=bind_rows) %>%
+  separate(fn, into=c('nah','n','m','fast','standardized'), sep='[_.]', extra='drop') %>%
+  separate(ETIME, into=c('hr','min','sec'), sep=':') %>% mutate(ETIME=3600*as.integer(hr)+60*as.integer(min)+as.integer(sec))
+  
+results %>% ggplot(aes(x=ETIME, y=RSS, group=PID)) + geom_line()
+results %>% group_by(n, m, fast, standardized) %>% summarise_each(funs(max), RSS, VSZ, ETIME) %>%
+  ungroup %>%
+  mutate(n=as.integer(n), m=as.integer(m)) %>%
+  gather('stat','val',RSS, VSZ,ETIME) %>%
+  ggplot(aes(x=n*m, y=val)) + geom_line() + facet_grid(stat~., scales='free_y')
+```
 
 # Code preamble
 
