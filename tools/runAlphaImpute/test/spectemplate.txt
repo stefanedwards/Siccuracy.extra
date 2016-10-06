@@ -1,0 +1,24 @@
+PedigreeFile,Pedigree.txt
+GenotypeFile				,Genotype.txt
+SexChrom				,No
+NumberSnp				,[NUMBEROFSNP]
+InternalEdit				,No
+EditingParameters			,0.0,0.0,0.0,AllSnpOut
+NumberPhasingRuns			,4
+CoreAndTailLengths			,400,700,1000,1500
+CoreLengths				,350,600,900,1400
+PedigreeFreePhasing			,No
+GenotypeError				,0.0
+NumberOfProcessorsAvailable		,8
+InternalIterations			,2
+PreprocessDataOnly			,[PREPROCESSONLY]
+PhasingOnly				,No
+ConservativeHaplotypeLibraryUse		,No
+WellPhasedThreshold			,99.0
+UserDefinedAlphaPhaseAnimalsFile	,None
+PrePhasedFile				,None
+BypassGeneProb				,[BYPASS]
+RestartOption				,[RESTART]
+HMMOption				,No    
+HmmParameters				,50,5,10,8,-123456789
+TrueGenotypeFile			,None 
