@@ -325,8 +325,8 @@ dbSendQuery(dbconn, 'CREATE TABLE IF NOT EXISTS results (
   CONSTRAINT C_UNIQUE_result UNIQUE (jobid, type, ETIME) ON CONFLICT REPLACE);')
 dbSendQuery(dbconn, 'CREATE INDEX IF NOT EXISTS IDX_results_jobid ON results (jobid, type);')
 
-ns <- c(100, 500)#, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000)
-ms <- c(1000, 2000) #, 5000, 7000, 8000, 10000, 12000, 15000, 20000, 25000, 30000)
+ns <- c(100, 500, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000)
+ms <- c(1000, 2000, 5000, 7000, 8000, 10000, 12000, 15000, 20000, 25000, 30000)
 
 expand.grid(n=ns, m=ms, standardized=c('TRUE','FALSE'), adaptive=c('TRUE','FALSE'), replicate=1:5) %>%
   dbSendPreparedQuery(dbconn, 'INSERT OR IGNORE INTO jobs (n, m, standardized, adaptive, replicate) VALUES (:n, :m, :standardized, :adaptive, :replicate);')
@@ -371,8 +371,8 @@ while (TRUE) {
   write.snps(true, fn1)
   write.snps(impu, fn2)
   
-  st <- system2('./launcher.sh', args=c(n,m,fast,standardized,fn))
-  if (st == 0) dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=2 WHERE jobid=:jobid;')
+  st <- system2('./launcher.sh', stdout=FALSE)
+  if (st == 0) dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=2 WHERE jobid=:jobid;', next.job)
 }
 try(dbRollback(dbconn), silent=TRUE)
 
