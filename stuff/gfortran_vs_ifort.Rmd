@@ -1,0 +1,380 @@
+---
+title: "Test run time and memory usage of imputation accuracy"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+author: "Stefan McKinnon Hoj-Edwards"
+output: 
+  html_document: 
+    theme: spacelab
+    toc: yes
+    toc_float: true
+---
+
+
+This vignette is for testing memory and running time of Siccuracy's `imputation_accuracy` function using native `gfortran` compiled `.so` and `ifort` compiled `.so`.
+It repeats the previous memory test as it runs `imputation_accuracy` under both
+`fast=TRUE` and `fast=FALSE`. When `fast=TRUE`, neither matrix is stored in memory, whereas when `fast=FALSE`,
+the true genotype file is stored in memory for matching row IDs.
+
+Further more, using `standardization=TRUE` forces the methods to read the true genotype file *twice* in order to calculate means and standard deviations of true genotypes.
+
+To acomplish this, we do *not* load the `Siccuracy`-package.
+
+In order to estimate memory usage, the calculation is launched in a subprocess, while using Gregor Gorjanc's [cpumemlog](https://github.com/gregorgorjanc/cpumemlog) to monitor the usage of the subprocess.
+
+```{r setup, include=FALSE}
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RSQLite)
+
+BASEDIR <- getwd()
+TMPDIR <- Sys.getenv('TMPDIR',tempdir())
+TASKID <- Sys.getenv('SGE_TASK_ID', 'undefined')
+suppressWarnings(TASKID <- as.integer(TASKID))
+if (is.na(TASKID)) TASKID <- 0
+
+.dot <- function(x) {
+  f <- function(..., relative=FALSE) {
+    if (relative) {
+      file.path(file.path(x, c(...)))
+    } else {
+      file.path(BASEDIR, x, c(...))
+    }
+  } 
+  null <- dir.create(f(''), FALSE, TRUE)
+  return(f)
+}
+.cached <- .dot('cache_gfortran_vs_ifort')
+.results <- .dot('gfortran_vs_ifort_results')
+
+knitr::opts_knit$set(root.dir=TMPDIR)
+knitr::opts_chunk$set(echo = TRUE, cache=FALSE, autodep=TRUE, 
+                      cache.path = .cached('/'), 
+                      fig.path = .results('/', relative=TRUE), 
+                      fig.width=10, fig.height=7)
+
+system2 <- function(command, ..., stdout='', stderr='') {
+  if (is.null(knitr::opts_current$get('results'))) 
+    return(base::system2(command, ..., stdout=stdout, stderr=stderr))
+  .stdout=stdout
+  .stderr=stderr
+  if (stdout=='') stdout=stderr=TRUE
+  res <- base::system2(command, ..., stdout=stdout, stderr=stderr)
+  if (is.character(res)) res <- gsub('[^\b](?R)?\b', '', res, perl=TRUE) # remove backspaces.
+  if (.stdout=='') {
+    if (.stderr==TRUE | .stdout=='') cat(res, sep='\n', file=stderr())
+    if (knitr::opts_current$get('results') == 'asis') {
+      cat(knitr::knit_hooks$get('output')(c(res, '\n'), knitr::opts_current$get()), file=stdout())
+    } else {
+      cat(res, sep='\n', file=stdout())
+    }
+    stat <- attr(res, 'status')
+    if (is.null(stat)) stat <- 0
+    attr(stat, 'errmsg') <- attr(res, 'errmsg')
+    attr(stat, 'status') <- stat
+    res <- stat
+  } else if (.stdout==FALSE) {
+    attr(res, 'status') <- res
+  }
+  if (is.null(attr(res, 'status'))) attr(res, 'status') <- 0
+  invisible(res)
+}
+
+dbBegin <- function(conn, ...) invisible(RSQLite::dbBegin(conn, ...))
+dbCommit <- function(conn, ...) invisible(RSQLite::dbCommit(conn, ...))
+dbRollback <- function(conn, ...) invisible(RSQLite::dbRollback(conn, ...))
+
+dbSendQuery <- function(conn, statement) invisible(dbClearResult(RSQLite::dbSendQuery(conn, statement)))
+
+dbSendPreparedQuery <- function(conn, statement, df, attempts=5, ...) {
+  cl <- class(conn)
+  if (cl[1] == 'SQLiteConnection') {
+    # do nothing
+    co <- conn
+    st <- statement
+    df <- as.data.frame(df)
+  } else if (any(c('tbl_df','tbl','data.frame') %in% cl)) {
+    co <- statement
+    st <- df
+    df <- as.data.frame(conn)
+  }
+  
+  # Now try to send
+  i <- 0
+  while (i < attempts) {
+    res <- try(RSQLite::dbSendPreparedQuery(co, st, df, ...), silent = TRUE)
+    if (!is(res, 'try-error')) break
+    i <- i + 1
+  }
+  if (is(res, 'try-error')) stop(res)
+  dbClearResult(res)
+  invisible(res)
+}
+
+dbGetQuery <- function(conn, statement, ..., attempts=5) {
+  i <- 0
+  while (i < attempts) {
+    res <- try(RSQLite::dbGetQuery(conn, statement, ...), silent = TRUE)
+    if (!is(res, 'try-error')) break
+    i <- i + 1
+  }
+  if (is(res, 'try-error')) stop(res)
+  res
+}
+
+dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
+  i <- 0
+  while (i < attempts) {
+    res <- try(RSQLite::dbGetPreparedQuery(conn, statement, df, ...), silent = TRUE)
+    if (!is(res, 'try-error')) break
+    i <- i + 1
+  }
+  if (is(res, 'try-error')) stop(res)
+  res
+}
+
+```
+
+
+# Preparations
+
+## Compiling
+
+### gfortran
+
+```{r gfortran}
+srcdir <- file.path(BASEDIR, '..', 'Siccuracy', 'src')
+files <- list.files(srcdir, pattern='*.f95')
+
+tmp <- tempdir()
+olddir <- setwd(tmp)
+file.copy(file.path(src, files), '.', overwrite=TRUE)
+out <- file.path(TMPDIR, 'gfort.so')
+system2('R', args=c('CMD SHLIB','-o', out, files))
+```
+
+
+### ifort
+
+```{r ifort}
+tmp <- tempdir()
+olddir <- setwd(tmp)
+file.copy(file.path(src, files), file.path(tmp, knitr:::sub_ext(files, 'f90')), overwrite=TRUE)
+files <- list.files(tmp, pattern='*.f90')
+out <- file.path(TMPDIR, 'ifort.so')
+cat('FC=ifort\n', file='localvars')
+system2('R', args=c('CMD SHLIB','-o', out, '--dry-run', files), env=c('R_MAKEVARS_USER=localvar', 'PKG_FCFLAGS=-O3'))
+```
+
+## Templates
+
+Contents of `launcher.sh`:
+```{r cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
+#Rscript --no-restore prepare.R 
+Rscript --no-restore test.R $TMPDIR/gfort.so &
+pid=$!
+./cpumemlog.sh $pid -o= -t=1
+wait
+Rscript --no-restore wrapup.R gfort.so
+
+Rscript --no-restore test.R $TMPDIR/ifort.so &
+pid=$!
+./cpumemlog.sh $pid -o=cpumemlog.txt -t=1
+wait
+Rscript --no-restore wrapup.R ifort.so
+
+```
+
+Contents of `test.R`:
+
+```{r cache=FALSE,engine='cat',engine.opts=list(file='test.R',lang='R')}
+load('run_options.Rdata')
+
+args <- commandArgs(TRUE)
+dyn.load(args[1])
+
+imputation_accuracy('true.txt','impu.txt', nSNPs=m, nAnimals=n, standardized=standardized, adaptive=adaptive)
+```
+
+Contents of `wrapup.R`:
+
+```{r cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
+library(RSQLite)
+library(dplyr)
+library(tidyr)
+
+load('run_options.Rdata')
+
+args <- commandArgs(TRUE)
+type <- args[1]
+
+dbconn <- dbConnect(SQLite(), dbfn)
+dbSendQuery(dbconn, 'PRAGMA busy_timeout=12000;')
+
+x <- read.table('cpumemlog.txt', header=TRUE, as.is=TRUE, fill=TRUE)
+if (nrow(x) > 0) {
+  x %>% separate(ETIME, into=c('hr','min','sec'), sep=':') %>% mutate(ETIME=3600*as.integer(hr)+60*as.integer(min)+as.integer(sec)) %>%
+    mutate(type=type, rowid=rowid) %>%
+    dbSendPreparedQuery(dbconn, 'INSERT INTO results (jobid, type, ETIME, RSS, VSZ) VALUES (:rowid, :type, :ETIME, :RSS, :VSZ);')
+}
+
+
+```
+
+## Functions
+
+```{r functions}
+make.true <- function(n,m) {
+  true <- matrix(sample(0:2, size = n*m, replace=TRUE), ncol=m)  # fill true with random 0, 1, or 2.
+  # add non-segregating site
+  i <- sample.int(m, 1)
+  true[2:n,i] <- true[1,i]
+  rownames(true) <- as.character(1:nrow(true))
+  true
+}
+make.imputed <- function(true) {
+  m <- ncol(true)
+  n <- nrow(true)
+  imputed <- true
+  imputed[sample.int(n*m, floor(n*m*0.5))] <- sample(0:2, size=floor(n*m*0.5), replace=TRUE) # change half the elements
+  imputed[sample.int(n*m, floor(n*m*0.1))] <- NA  # some elements are missing.
+  imputed
+}
+write.snps <- function(x, fn, row.names=TRUE, na='9', ...) {
+  write.table(x, fn, col.names=FALSE, row.names=row.names, quote=FALSE, na=na, ...)
+}
+
+run_env <- new.env()
+
+run_env$dbSendQuery <- dbSendQuery
+run_env$dbSendPreparedQuery <- dbSendPreparedQuery
+
+run_env$imputation_accuracy <- function(truefn, imputefn, nSNPs=NULL, nAnimals=NULL, NAval=9, standardized=TRUE, adaptive=TRUE) {
+  stopifnot(file.exists(truefn))
+  stopifnot(file.exists(imputefn))
+  
+  standardized <- as.logical(standardized)
+  if (is.null(nSNPs)) {
+    nSNPs <- get_ncols(truefn)-1
+  }
+  if (is.null(nAnimals)) {
+    nAnimals <- get_nlines(truefn)
+  }
+  m <- as.integer(nSNPs)
+  n <- as.integer(nAnimals)
+  
+  subroutine <- ifelse(adaptive, 'imp_acc', 'imp_acc_fast')
+  
+  res <- .Fortran(subroutine,
+                  truefn=as.character(truefn),
+                  imputedfn=as.character(imputefn),
+                  nSnps=m,
+                  nAnimals=as.integer(nAnimals),
+                  NAval=as.integer(NAval),
+                  standardized=as.integer(standardized),
+                  means=vector('numeric',m), sds=vector('numeric',m),  # Placeholders for return data.
+                  rowcors=vector('numeric', n), matcor=numeric(1), colcors=vector('numeric',m),
+                  rowID=vector('integer',n))
+}
+
+run_env$get_ncols <- function(fn) {
+  on.exit(try(close(f), silent=TRUE))
+  f <- gzfile(fn, 'r')
+  s <- scan(f, what=character(), quiet=TRUE, nlines=1)
+  close(f)
+  length(s)
+}
+
+run_env$get_nlines <- function(fn, showWarning=TRUE, doError=FALSE) {
+  stopifnot(file.exists(fn))
+  res <- .Fortran('get_nlines', fn=as.character(fn), nlines=integer(1), stat=integer(1))
+  if (res$nlines == 0 & res$stat != 0) {
+    msg <- paste0('get_nlines did not read lines; stat error ', res$stat, '.')
+    if (doError) { stop(msg)
+    } else if (showWarning) warning(msg)
+  }
+  res$nlines
+}
+```
+
+# Setup database for tests
+```{r setup_db, cache=FALSE}
+dbconn <- dbConnect(SQLite(), .results('results.sqlite'))
+dbSendQuery(dbconn, 'PRAGMA busy_timeout=12000;')
+
+dbSendQuery(dbconn, 'CREATE TABLE IF NOT EXISTS jobs (
+  jobid INTEGER PRIMARY KEY,
+  n INTEGER NOT NULL,
+  m INTEGER NOT NULL,
+  standardized TEXT NOT NULL COLLATE NOCASE,
+  adaptive TEXT NOT NULL COLLATE NOCASE,
+  replicate INTEGER NOT NULL DEFAULT 0,
+  status INTEGER NOT NULL DEFAULT 0,
+  CONSTRAINT C_UNIQUE_job UNIQUE (n, m, standardized, adaptive, replicate) ON CONFLICT IGNORE);')
+dbSendQuery(dbconn, 'CREATE INDEX IF NOT EXISTS IDX_jobstatus ON jobs (status);')
+
+dbSendQuery(dbconn, 'CREATE TABLE IF NOT EXISTS results (
+  jobid INTEGER NOT NULL,
+  type TEXT NOT NULL COLLATE NOCASE,
+  ETIME INTEGER NOT NULL,
+  RSS INTEGER NOT NULL,
+  VSZ INTEGER NOT NULL,
+  CONSTRAINT C_UNIQUE_result UNIQUE (jobid, type, ETIME) ON CONFLICT REPLACE);')
+dbSendQuery(dbconn, 'CREATE INDEX IF NOT EXISTS IDX_results_jobid ON results (jobid, type);')
+
+ns <- c(100, 500)#, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000)
+ms <- c(1000, 2000) #, 5000, 7000, 8000, 10000, 12000, 15000, 20000, 25000, 30000)
+
+expand.grid(n=ns, m=ms, standardized=c('TRUE','FALSE'), adaptive=c('TRUE','FALSE'), replicate=1:5) %>%
+  dbSendPreparedQuery(dbconn, 'INSERT OR IGNORE INTO jobs (n, m, standardized, adaptive, replicate) VALUES (:n, :m, :standardized, :adaptive, :replicate);')
+```
+
+
+
+```{r iterator,cache=FALSE}
+
+Sys.sleep(TASKID * 10)
+run_env$dbfn <- .results('results.sqlite')
+
+while (TRUE) {
+  dbBegin(dbconn)
+  next.job <- dbGetQuery(dbconn, 'SELECT * FROM jobs WHERE status=0 LIMIT 1;')
+  if (nrow(next.job) == 0) break
+  dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=1 WHERE jobid=:jobid;')
+  dbCommit(dbconn)
+  with(next.job, cat('- Running', jobid, sprintf('(n = %d, m = %d)', n, m), '\n'), file=stderr())
+  
+  attach(df)
+  run_env$n <- as.integer(n)
+  run_env$m <- as.integer(m)
+  run_env$standardized <- as.logical(standardized)
+  run_env$adaptive <- as.logical(adaptive)
+  detach(df)
+  
+  save(list=ls(envir=run_env), envir=run_env, file='run_options.Rdata')
+  
+  true <- make.true(n, m)
+  impu <- make.imputed(true)
+  
+  fn1 <- 'true.txt'
+  fn2 <- 'impu.txt'
+  
+  unlink(c(fn1,fn2))
+  
+  write.snps(true, fn1)
+  write.snps(impu, fn2)
+  
+  st <- system2('./launcher.sh', args=c(n,m,fast,standardized,fn))
+  if (st == 0) dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=2 WHERE jobid=:jobid;')
+}
+try(dbRollback(dbconn), silent=TRUE)
+
+
+```
+
+# Code preamble
+
+The following code block is executed in the very beginning of the script.
+```{r setup,eval=FALSE}
+```
