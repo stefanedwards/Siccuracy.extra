@@ -108,12 +108,12 @@ launch <- function(n, m, fast, standardized, fn=NULL) {
   standardized <- as.character(standardized)
   if (is.null(fn)) fn <- .results(paste0(paste('cpumemlog',n,m,fast,standardized,sep='_'), '.txt'))
   st <- system2('./launcher.sh', args=c(n,m,fast,standardized,fn), env=paste0('R_LIBS=', paste(.libPaths(), collapse=':')))
-  if (st != 0) return(NULL)
+  if (st != 0) {unlink(fn); return(NULL)}
   fn
 }
 
-ns <- c(100, 500, 1000, 2000, 5000, 1e5, 5e5, 1e6)
-ms <- c(1000, 2000, 5000, 1e5, 5e5, 1e6)
+ns <- c(100, 500, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000)
+ms <- c(1000, 2000, 5000, 7000, 8000, 10000, 12000, 15000, 20000, 25000, 30000)
 ```
 
 ## Non-fast, no standardisation
@@ -148,7 +148,7 @@ for (n in ns) {
 
 ## Fast, with standardisation
 
-```{r fast_nostandard,eval=TASKID==0|TASKID==4}
+```{r fast_standard,eval=TASKID==0|TASKID==4}
 for (n in ns) {
   for (m in ms) {
     launch(n, m, fast=TRUE, standardized=TRUE)
@@ -160,17 +160,30 @@ for (n in ns) {
 
 ```{r cache=FALSE}
 results <- list.files(.results('/'), pattern = 'cpumemlog.*.txt', full.names = TRUE) %>%
-  lapply(function(s) read.table(s, header=TRUE, as.is=TRUE) %>% mutate(fn=basename(s))) %>%
+  lapply(function(s) read.table(s, header=TRUE, as.is=TRUE, fill=TRUE) %>% mutate(fn=basename(s))) %>%
   do.call(what=bind_rows) %>%
+  filter(!is.na(COMMAND), ETIME != '') %>%
   separate(fn, into=c('nah','n','m','fast','standardized'), sep='[_.]', extra='drop') %>%
-  separate(ETIME, into=c('hr','min','sec'), sep=':') %>% mutate(ETIME=3600*as.integer(hr)+60*as.integer(min)+as.integer(sec))
+  separate(ETIME, into=c('hr','min','sec'), sep=':') %>% mutate(ETIME=3600*as.integer(hr)+60*as.integer(min)+as.integer(sec)) %>%
+  mutate(n=as.integer(n), m=as.integer(m))
+
+results %>% group_by(n, m, fast, standardized) %>% summarise_each(funs(max), RSS, VSZ, ETIME) %>% with(table(n,m,fast,standardized))
   
-results %>% ggplot(aes(x=ETIME, y=RSS, group=PID)) + geom_line()
-results %>% group_by(n, m, fast, standardized) %>% summarise_each(funs(max), RSS, VSZ, ETIME) %>%
-  ungroup %>%
-  mutate(n=as.integer(n), m=as.integer(m)) %>%
+results %>% ggplot(aes(x=ETIME, y=RSS, group=PID, linetype=standardized, colour=fast)) + geom_line()
+
+results %>% filter(n %in% c(500,2000,5000)) %>% group_by(n, m, fast, standardized) %>% summarise_each(funs(max), RSS, VSZ, ETIME) %>%
   gather('stat','val',RSS, VSZ,ETIME) %>%
-  ggplot(aes(x=n*m, y=val)) + geom_line() + facet_grid(stat~., scales='free_y')
+  ggplot(aes(x=m, y=val, colour=fast, linetype=standardized, group=interaction(fast, standardized))) + geom_line() + 
+  facet_grid(stat~n, scales='free_y',labeller=labeller(n=label_both)) +
+  scale_x_log10()
+
+results %>% filter(m %in% c(5000, 1000000)) %>% group_by(n, m, fast, standardized) %>% summarise_each(funs(max), RSS, VSZ, ETIME) %>%
+  gather('stat','val',RSS, VSZ,ETIME) %>%
+  ggplot(aes(x=n, y=val, colour=fast, linetype=standardized, group=interaction(fast, standardized))) + geom_line() + 
+  facet_grid(stat~m, scales='free_y',labeller=labeller(m=label_both)) +
+  scale_x_log10()
+
+
 ```
 
 # Code preamble
