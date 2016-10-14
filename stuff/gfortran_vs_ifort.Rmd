@@ -149,7 +149,7 @@ files <- list.files(srcdir, pattern='*.f95')
 
 tmp <- tempdir()
 olddir <- setwd(tmp)
-file.copy(file.path(src, files), '.', overwrite=TRUE)
+file.copy(file.path(srcdir, files), '.', overwrite=TRUE)
 out <- file.path(TMPDIR, 'gfort.so')
 system2('R', args=c('CMD SHLIB','-o', out, files))
 ```
@@ -160,11 +160,11 @@ system2('R', args=c('CMD SHLIB','-o', out, files))
 ```{r ifort}
 tmp <- tempdir()
 olddir <- setwd(tmp)
-file.copy(file.path(src, files), file.path(tmp, knitr:::sub_ext(files, 'f90')), overwrite=TRUE)
+file.copy(file.path(srcdir, files), file.path(tmp, knitr:::sub_ext(files, 'f90')), overwrite=TRUE)
 files <- list.files(tmp, pattern='*.f90')
 out <- file.path(TMPDIR, 'ifort.so')
-cat('FC=ifort\n', file='localvars')
-system2('R', args=c('CMD SHLIB','-o', out, '--dry-run', files), env=c('R_MAKEVARS_USER=localvar', 'PKG_FCFLAGS=-O3'))
+cat('FC=ifort\nF77=ifort\n', file='Makevars')
+system2('R', args=c('CMD SHLIB','-o', out,  files), env=c('R_MAKEVARS_USER=Makevars', 'PKG_FCFLAGS=-O3'))
 ```
 
 ## Templates
@@ -174,7 +174,7 @@ Contents of `launcher.sh`:
 #Rscript --no-restore prepare.R 
 Rscript --no-restore test.R $TMPDIR/gfort.so &
 pid=$!
-./cpumemlog.sh $pid -o= -t=1
+./cpumemlog.sh $pid -o=cpumemlog.txt -t=1
 wait
 Rscript --no-restore wrapup.R gfort.so
 
@@ -200,9 +200,9 @@ imputation_accuracy('true.txt','impu.txt', nSNPs=m, nAnimals=n, standardized=sta
 Contents of `wrapup.R`:
 
 ```{r cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
-library(RSQLite)
-library(dplyr)
-library(tidyr)
+library(RSQLite, quietly=TRUE)
+#library(dplyr)
+#library(tidyr)
 
 load('run_options.Rdata')
 
@@ -213,13 +213,15 @@ dbconn <- dbConnect(SQLite(), dbfn)
 dbSendQuery(dbconn, 'PRAGMA busy_timeout=12000;')
 
 x <- read.table('cpumemlog.txt', header=TRUE, as.is=TRUE, fill=TRUE)
+x <- x[!is.na(x$VSZ),]
 if (nrow(x) > 0) {
-  x %>% separate(ETIME, into=c('hr','min','sec'), sep=':') %>% mutate(ETIME=3600*as.integer(hr)+60*as.integer(min)+as.integer(sec)) %>%
-    mutate(type=type, rowid=rowid) %>%
-    dbSendPreparedQuery(dbconn, 'INSERT INTO results (jobid, type, ETIME, RSS, VSZ) VALUES (:rowid, :type, :ETIME, :RSS, :VSZ);')
+  ti <- do.call(rbind, lapply(strsplit(x$ETIME, ':', fixed=TRUE), as.integer))
+  x$ETIME <- 3600*ti[,1] + 60*ti[,2] + ti[,3]
+  x$type <- type
+  x$jobid <- jobid
+  dbSendPreparedQuery(dbconn, 'INSERT INTO results (jobid, type, ETIME, RSS, VSZ) VALUES (:jobid, :type, :ETIME, :RSS, :VSZ);', x)
 }
-
-
+dbDisconnect(dbconn)
 ```
 
 ## Functions
@@ -337,24 +339,28 @@ expand.grid(n=ns, m=ms, standardized=c('TRUE','FALSE'), adaptive=c('TRUE','FALSE
 Sys.sleep(TASKID * 10)
 run_env$dbfn <- .results('results.sqlite')
 
+file.copy(file.path(BASEDIR, '../tools/cpumemlog/cpumemlog.sh'), TMPDIR, overwrite = TRUE)
+system2('chmod', c('u+x', 'cpumemlog.sh','launcher.sh'))
+
 while (TRUE) {
   dbBegin(dbconn)
   next.job <- dbGetQuery(dbconn, 'SELECT * FROM jobs WHERE status=0 LIMIT 1;')
   if (nrow(next.job) == 0) break
-  dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=1 WHERE jobid=:jobid;')
+  dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=1 WHERE jobid=:jobid;', next.job)
   dbCommit(dbconn)
   with(next.job, cat('- Running', jobid, sprintf('(n = %d, m = %d)', n, m), '\n'), file=stderr())
   
-  attach(df)
+  attach(next.job)
   run_env$n <- as.integer(n)
   run_env$m <- as.integer(m)
   run_env$standardized <- as.logical(standardized)
   run_env$adaptive <- as.logical(adaptive)
-  detach(df)
+  run_env$jobid <- jobid
+  detach(next.job)
   
   save(list=ls(envir=run_env), envir=run_env, file='run_options.Rdata')
   
-  true <- make.true(n, m)
+  true <- make.true(run_env$n, run_env$m)
   impu <- make.imputed(true)
   
   fn1 <- 'true.txt'
