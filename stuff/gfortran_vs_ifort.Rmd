@@ -48,6 +48,8 @@ if (is.na(TASKID)) TASKID <- 0
 .cached <- .dot('cache_gfortran_vs_ifort')
 .results <- .dot('gfortran_vs_ifort_results')
 
+.do.computations = .Platform$OS.type != 'windows'
+
 knitr::opts_knit$set(root.dir=TMPDIR)
 knitr::opts_chunk$set(echo = TRUE, cache=FALSE, autodep=TRUE, 
                       cache.path = .cached('/'), 
@@ -133,9 +135,11 @@ dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
   if (is(res, 'try-error')) stop(res)
   res
 }
-
 ```
 
+```{r echo=FALSE,eval=!.do.computations,results='asis'}
+cat('**Will not run computations, only summaries.**\n')
+```
 
 # Preparations
 
@@ -143,7 +147,7 @@ dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
 
 ### gfortran
 
-```{r gfortran}
+```{r gfortran,eval=.do.computations}
 srcdir <- file.path(BASEDIR, '..', 'Siccuracy', 'src')
 files <- list.files(srcdir, pattern='*.f95')
 
@@ -157,7 +161,7 @@ system2('R', args=c('CMD SHLIB','-o', out, files))
 
 ### ifort
 
-```{r ifort}
+```{r ifort,eval=.do.computations}
 tmp <- tempdir()
 olddir <- setwd(tmp)
 file.copy(file.path(srcdir, files), file.path(tmp, knitr:::sub_ext(files, 'f90')), overwrite=TRUE)
@@ -170,7 +174,7 @@ system2('R', args=c('CMD SHLIB','-o', out,  files), env=c('R_MAKEVARS_USER=Makev
 ## Templates
 
 Contents of `launcher.sh`:
-```{r cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
+```{r launcher_sh,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
 #Rscript --no-restore prepare.R 
 Rscript --no-restore test.R $TMPDIR/gfort.so &
 pid=$!
@@ -188,7 +192,7 @@ Rscript --no-restore wrapup.R ifort.so
 
 Contents of `test.R`:
 
-```{r cache=FALSE,engine='cat',engine.opts=list(file='test.R',lang='R')}
+```{r test_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='test.R',lang='R')}
 load('run_options.Rdata')
 
 args <- commandArgs(TRUE)
@@ -199,7 +203,7 @@ imputation_accuracy('true.txt','impu.txt', nSNPs=m, nAnimals=n, standardized=sta
 
 Contents of `wrapup.R`:
 
-```{r cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
+```{r wrapup_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
 library(RSQLite, quietly=TRUE)
 #library(dplyr)
 #library(tidyr)
@@ -226,7 +230,7 @@ dbDisconnect(dbconn)
 
 ## Functions
 
-```{r functions}
+```{r functions,eval=.do.computations}
 make.true <- function(n,m) {
   true <- matrix(sample(0:2, size = n*m, replace=TRUE), ncol=m)  # fill true with random 0, 1, or 2.
   # add non-segregating site
@@ -300,7 +304,7 @@ run_env$get_nlines <- function(fn, showWarning=TRUE, doError=FALSE) {
 }
 ```
 
-# Setup database for tests
+## Setup database for tests
 ```{r setup_db, cache=FALSE}
 dbconn <- dbConnect(SQLite(), .results('results.sqlite'))
 dbSendQuery(dbconn, 'PRAGMA busy_timeout=12000;')
@@ -325,6 +329,18 @@ dbSendQuery(dbconn, 'CREATE TABLE IF NOT EXISTS results (
   CONSTRAINT C_UNIQUE_result UNIQUE (jobid, type, ETIME) ON CONFLICT REPLACE);')
 dbSendQuery(dbconn, 'CREATE INDEX IF NOT EXISTS IDX_results_jobid ON results (jobid, type);')
 
+dbSendQuery(dbconn, 'CREATE TRIGGER IF NOT EXISTS tr_job_reset
+  AFTER UPDATE OF status ON jobs FOR EACH ROW WHEN new.status=0
+  BEGIN
+    DELETE FROM results WHERE new.status=0 AND jobid=new.jobid;
+  END;')
+
+dbSendQuery(dbconn, 'CREATE VIEW IF NOT EXISTS view_jobs AS
+  SELECT standardized, adaptive, sum(status==0) as pending, sum(status==2) as finished from jobs group by standardized, adaptive;')
+dbSendQuery(dbconn, 'CREATE VIEW IF NOT EXISTS view_results AS
+  SELECT n, m, standardized, adaptive, replicate, type, ETIME, RSS, VSZ FROM jobs INNER JOIN results USING (jobid)
+  WHERE jobs.status=2;')
+
 ns <- c(100, 500)#, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000)
 ms <- c(1000, 2000) #, 5000, 7000, 8000, 10000, 12000, 15000, 20000, 25000, 30000)
 
@@ -332,9 +348,9 @@ expand.grid(n=ns, m=ms, standardized=c('TRUE','FALSE'), adaptive=c('TRUE','FALSE
   dbSendPreparedQuery(dbconn, 'INSERT OR IGNORE INTO jobs (n, m, standardized, adaptive, replicate) VALUES (:n, :m, :standardized, :adaptive, :replicate);')
 ```
 
+## Main iterator
 
-
-```{r iterator,cache=FALSE}
+```{r iterator,eval=.do.computations,cache=FALSE}
 
 Sys.sleep(TASKID * 10)
 run_env$dbfn <- .results('results.sqlite')
@@ -376,6 +392,51 @@ while (TRUE) {
 }
 try(dbRollback(dbconn), silent=TRUE)
 
+
+```
+
+# Results
+
+Completion status, summarised on standardized and adaptive parameters.
+
+```{r results='as.is'}
+dbGetQuery(dbconn, 'SELECT * FROM view_jobs;') %>%
+  kable()
+```
+
+
+
+```{r detailed_completion_status}
+dbGetQuery(dbconn, 'SELECT n, standardized, adaptive, count(jobid) as total, sum(status==2) as complete, sum(status==0) as pending FROM jobs GROUP BY n, standardized, adaptive;') %>% 
+  #gather(param, val, standardized, adaptive) %>% 
+  mutate(missing=total-(complete+pending)) %>%
+  gather(stat, val, complete, pending, missing) %>%
+  ggplot(aes(x=as.factor(n), y=val, fill=stat)) + geom_bar(stat='identity') +
+  facet_grid(standardized ~ adaptive, labeller=label_both) + coord_flip() +
+  scale_fill_manual(values=structure(scales::hue_pal()(3), .Names=c('missing','complete','pending'))) + 
+  labs(title='Detailed completion status', y='Count', x='Animals (`n`)', colour='Status')
+```
+
+## Explorative results
+
+```{r}
+p <- dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% summarise_each(funs(max), ETIME, RSS, VSZ) %>%
+  gather(stat, val, ETIME, RSS, VSZ) %>%
+  ggplot(aes(x=n, y=val, colour=type)) + geom_line() +
+  facet_grid(stat + standardized ~ adaptive, labeller=label_both, scales='free_y')
+p
+p %+% aes(x=m)
+  
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>% 
+  group_by(n, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% 
+  group_by(n, standardized, adaptive, type) %>% summarise_each(funs(mean), m, ETIME, RSS, VSZ) %>% 
+  gather(param, val, m, ETIME, RSS, VSZ) %>%
+  ggplot(aes(x=n, y=val, colour=type)) + geom_line() + 
+  facet_grid(param ~ standardized + adaptive, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both))
 
 ```
 
