@@ -37,9 +37,9 @@ if (is.na(TASKID)) TASKID <- 0
 .dot <- function(x) {
   f <- function(..., relative=FALSE) {
     if (relative) {
-      file.path(file.path(x, c(...)))
+      file.path(file.path(x, .Platform$file.sep, c(...)))
     } else {
-      file.path(BASEDIR, x, c(...))
+      file.path(BASEDIR, x,  c(...))
     }
   } 
   null <- dir.create(f(''), FALSE, TRUE)
@@ -53,7 +53,7 @@ if (is.na(TASKID)) TASKID <- 0
 knitr::opts_knit$set(root.dir=TMPDIR)
 knitr::opts_chunk$set(echo = TRUE, cache=FALSE, autodep=TRUE, 
                       cache.path = .cached('/'), 
-                      fig.path = .results('/', relative=TRUE), 
+                      fig.path = .results('', relative=TRUE), 
                       fig.width=10, fig.height=7)
 
 system2 <- function(command, ..., stdout='', stderr='') {
@@ -405,14 +405,13 @@ dbGetQuery(dbconn, 'SELECT * FROM view_jobs;') %>%
 ```
 
 
-
 ```{r detailed_completion_status}
 dbGetQuery(dbconn, 'SELECT n, standardized, adaptive, count(jobid) as total, sum(status==2) as complete, sum(status==0) as pending FROM jobs GROUP BY n, standardized, adaptive;') %>% 
   #gather(param, val, standardized, adaptive) %>% 
   mutate(missing=total-(complete+pending)) %>%
   gather(stat, val, complete, pending, missing) %>%
   ggplot(aes(x=as.factor(n), y=val, fill=stat)) + geom_bar(stat='identity') +
-  facet_grid(standardized ~ adaptive, labeller=label_both) + coord_flip() +
+  facet_wrap( ~standardized + adaptive, ncol=2, labeller=label_both) + coord_flip() +
   scale_fill_manual(values=structure(scales::hue_pal()(3), .Names=c('missing','complete','pending'))) + 
   labs(title='Detailed completion status', y='Count', x='Animals (`n`)', colour='Status')
 ```
@@ -424,7 +423,7 @@ p <- dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>%
   group_by(n, m, standardized, adaptive, replicate, type) %>% summarise_each(funs(max), ETIME, RSS, VSZ) %>%
   gather(stat, val, ETIME, RSS, VSZ) %>%
   ggplot(aes(x=n, y=val, colour=type)) + geom_line() +
-  facet_grid(stat + standardized ~ adaptive, labeller=label_both, scales='free_y')
+  facet_grid(adaptive + stat ~ standardized, labeller=label_both, scales='free_y')
 p
 p %+% aes(x=m)
   
@@ -436,9 +435,46 @@ dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>%
   group_by(n, standardized, adaptive, type) %>% summarise_each(funs(mean), m, ETIME, RSS, VSZ) %>% 
   gather(param, val, m, ETIME, RSS, VSZ) %>%
   ggplot(aes(x=n, y=val, colour=type)) + geom_line() + 
-  facet_grid(param ~ standardized + adaptive, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both))
+  facet_grid(adaptive+param ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both))
 
 ```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>% 
+  group_by(m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% 
+  group_by(m, standardized, adaptive, type) %>% summarise_each(funs(mean), n, ETIME, RSS, VSZ) %>% 
+  gather(param, val, n, ETIME, RSS, VSZ) %>%
+  ggplot(aes(x=m, y=val, colour=type)) + geom_line() + 
+  facet_grid(adaptive+param ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both))
+
+```
+
+How many time series do we have of each replicate?
+```{r}
+dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
+  group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
+  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+view <- data.frame(n=20000, m=20000)
+```
+
+```{r}
+dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE n=:n;', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
+  gather(stat, val, ETIME, RSS, VSZ) %>%
+  ggplot(aes(x=m, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
+  facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
+  labs(title=paste(view$n, 'individuals'), x='# Markers', colour='Compiler') + theme(axis.title.y=element_blank())
+```
+
+```{r}
+dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m;', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
+  gather(stat, val, ETIME, RSS, VSZ) %>%
+  ggplot(aes(x=n, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
+  facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
+  labs(title=paste(view$m, 'markers'), x='# Individuals', colour='Compiler') + theme(axis.title.y=element_blank())
+```
+
 
 # Code preamble
 
