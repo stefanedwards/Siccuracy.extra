@@ -16,8 +16,10 @@ module load R/3.2.2
 #module load igmm/apps/dissect/1.2
 #module load igmm/libs/boost/1.59.0
 #module load igmm/apps/shapeit/2r837
+module load intel/2016
 module load igmm/libs/lapack/3.5.0
 module load openmpi/1.10.1
+
 
 export MKL_NUM_THREADS=$NSLOTS
 Rscript --no-restore -e "library('knitr'); knit('$1')"

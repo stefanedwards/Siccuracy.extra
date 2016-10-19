@@ -1,5 +1,10 @@
 #.Rprofile
 # enables dev_mode:
 
-library(devtools)
-devtools::dev_mode(on=TRUE, path=file.path(getwd(),'lib'))
+if (require(devtools, quietly=TRUE)) {
+  devtools::dev_mode(on=TRUE, path=file.path(getwd(),'lib'))
+} else {
+  add <- getwd()
+  if (basename(getwd()) == 'stuff') add <- file.path(add, '..')
+  .libPaths(file.path(add,'lib'))
+}
