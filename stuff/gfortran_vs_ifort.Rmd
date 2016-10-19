@@ -366,7 +366,7 @@ while (TRUE) {
   next.job$sge <- SGE_JOBID
   dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=1, SGE_JOBID=:sge WHERE jobid=:jobid;', next.job)
   dbCommit(dbconn)
-  with(next.job, cat('- Running', jobid, sprintf('(n = %d, m = %d)', n, m), '\n'), file=stderr())
+  with(next.job, cat('- Running', jobid, sprintf('(n = %d, m = %d)', n, m), '\n', file=stderr()))
   
   attach(next.job)
   run_env$n <- as.integer(n)
