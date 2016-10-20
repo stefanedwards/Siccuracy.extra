@@ -137,6 +137,7 @@ dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
   if (is(res, 'try-error')) stop(res)
   res
 }
+
 ```
 
 ```{r echo=FALSE,eval=!.do.computations,results='asis'}
@@ -477,10 +478,10 @@ dbGetQuery(dbconn, 'SELECT n, standardized, adaptive, count(jobid) as total, sum
 
 ```{r deconstruct_results_by_type}
 dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, type, ETIME FROM view_results;') %>%
-  group_by(n, m, standardized, adaptive, type) %>% top_n(1, ETIME) %>% summarise(no=n()) %>% 
-  ggplot(aes(x=1, y=no, fill=type)) + geom_bar(stat='identity', position='dodge') + 
-  facet_grid(adaptive + n ~ standardized + m) +
-  coord_polar() + theme(axis.title=element_blank(), axis.text=element_blank(), axis.ticks=element_blank())
+  group_by(n, m, standardized, adaptive, type) %>% top_n(1, ETIME) %>% 
+  ggplot(aes(x=as.factor(n), fill=type)) + geom_bar(position='dodge') + 
+  facet_grid(adaptive ~ standardized, labeller=label_both) +
+  coord_flip() + labs(x='Animals (`n`)', colour='Type')
 ```
 
 ## Explorative results
@@ -540,7 +541,7 @@ dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FR
 ```{r}
 dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FROM view_results;') %>%
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, RSS) %>%
-  ggplot(aes(x=n, y=RSS, colour=type)) + geom_point() +
+  ggplot(aes(x=n, y=RSS, colour=type)) + geom_point(pch=1) +
   facet_grid(adaptive ~ standardized, scales='free_y', labeller=label_both)
 ```
 
@@ -553,16 +554,20 @@ dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FR
 
 How many time series do we have of each replicate?
 ```{r}
-dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
+#dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
+#  group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
+#  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type FROM view_results;') %>%
+  distinct(n, m, st♦andardized, adaptive, replicate, type) %>% 
   group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
-  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
-view <- data.frame(n=20000, m=20000)
+  filter(types == 4) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+view <- data.frame(n=20000, m=30000)
 ```
 
 ```{r}
 dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE n=:n;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
-  gather(stat, val, ETIME, RSS, VSZ) %>%
+  gather(stat, val, ETIME, RSS, VSZ) %>% #filter(adaptive=='TRUE', standardized=='TRUE', stat=='VSZ', type!='gfortO3.so') %>% #filter(type=='gfort.so', adaptive=='TRUE', standardized=='TRUE') %>% View
   ggplot(aes(x=m, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
   facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
   labs(title=paste(view$n, 'individuals'), x='# Markers', colour='Compiler') + theme(axis.title.y=element_blank())
@@ -571,7 +576,7 @@ dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE n=:n;', view) %>%
 ```{r}
 dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
-  gather(stat, val, ETIME, RSS, VSZ) %>%
+  gather(stat, val, ETIME, RSS, VSZ) %>% 
   ggplot(aes(x=n, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
   facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
   labs(title=paste(view$m, 'markers'), x='# Individuals', colour='Compiler') + theme(axis.title.y=element_blank())
