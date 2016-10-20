@@ -471,8 +471,16 @@ dbGetQuery(dbconn, 'SELECT n, standardized, adaptive, count(jobid) as total, sum
   gather(stat, val, complete, pending, missing) %>%
   ggplot(aes(x=as.factor(n), y=val, fill=stat)) + geom_bar(stat='identity') +
   facet_wrap( ~standardized + adaptive, ncol=2, labeller=label_both) + coord_flip() +
-  scale_fill_manual(values=structure(scales::hue_pal()(3), .Names=c('missing','complete','pending'))) + 
+  scale_fill_manual(values=structure(scales::hue_pal(c(0,360)+180)(3), .Names=c('complete','missing','pending'))) + 
   labs(title='Detailed completion status', y='Count', x='Animals (`n`)', colour='Status')
+```
+
+```{r deconstruct_results_by_type}
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, type, ETIME FROM view_results;') %>%
+  group_by(n, m, standardized, adaptive, type) %>% top_n(1, ETIME) %>% summarise(no=n()) %>% 
+  ggplot(aes(x=1, y=no, fill=type)) + geom_bar(stat='identity', position='dodge') + 
+  facet_grid(adaptive + n ~ standardized + m) +
+  coord_polar() + theme(axis.title=element_blank(), axis.text=element_blank(), axis.ticks=element_blank())
 ```
 
 ## Explorative results
@@ -506,6 +514,41 @@ dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>%
   ggplot(aes(x=m, y=val, colour=type)) + geom_line() + 
   facet_grid(adaptive+param ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both))
 
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>%
+  gather(stat, val, RSS, VSZ) %>%
+  ggplot(aes(x=ETIME, y=val, colour=type, group=interaction(type, replicate, n, m))) + geom_line() +
+  facet_grid(adaptive+stat ~ standardized, scales='free_y')
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, ETIME FROM view_results;') %>%
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>%
+  ggplot(aes(x=n*m, y=ETIME, colour=type)) + geom_point() +
+  facet_grid(standardized ~ adaptive, labeller=label_both)
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FROM view_results;') %>%
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, RSS) %>%
+  ggplot(aes(x=n*m, y=RSS, colour=type)) + geom_point(pch=1) +
+  facet_grid(adaptive ~ standardized, scales='free_y', labeller=label_both)
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FROM view_results;') %>%
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, RSS) %>%
+  ggplot(aes(x=n, y=RSS, colour=type)) + geom_point() +
+  facet_grid(adaptive ~ standardized, scales='free_y', labeller=label_both)
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FROM view_results;') %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, RSS) %>%
+  ggplot(aes(x=m, y=RSS, colour=type)) + geom_point(pch=1) +
+  facet_grid(adaptive ~ standardized, scales='free_y', labeller=label_both)
 ```
 
 How many time series do we have of each replicate?
