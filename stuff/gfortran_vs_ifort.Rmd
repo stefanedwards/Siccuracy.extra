@@ -157,7 +157,9 @@ tmp <- tempdir()
 olddir <- setwd(tmp)
 file.copy(file.path(srcdir, files), '.', overwrite=TRUE)
 out <- file.path(TMPDIR, 'gfort.so')
-system2('R', args=c('CMD SHLIB','-o', out, files))
+system2('R', args=c('CMD SHLIB','-o', out, files))  # native
+file.size(out)
+
 
 cat('\nRe-compiling with -O3 optimizations:\n', file=stderr())
 unlink('*.o')
@@ -165,7 +167,12 @@ out <- file.path(TMPDIR, 'gfortO3.so')
 #system2('R', args=c('CMD SHLIB','-o', out, files), env='PKG_FCFLAGS=-O3')
 # --> modules are compiled as gfortran -O3 -fpic -g -O2  -c  auxil.f95 -o auxil.o, where the last -O2 becomes the effective option.
 # (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
-system2('R', args=c('CMD SHLIB','-o', out, files), env='PKG_FCFLAGS=\'-finline-functions -funswitch-loops -fpredictive-commoning -fgcse-after-reload -ftree-loop-distribute-patterns -ftree-slp-vectorize -fvect-cost-model -ftree-partial-pre -fpeel-loops -fipa-cp-clone\'')
+# pre-compile modules with optimizations before linking.
+for (f in files) {
+  system2('gfortran', args=c('-O3','-fpic','-c', f, '-o', knitr:::sub_ext(f, 'o')))
+}
+system2('R', args=c('CMD SHLIB','-o', out, files))
+file.size(out)
 ```
 
 
@@ -177,32 +184,23 @@ olddir <- setwd(tmp)
 file.copy(file.path(srcdir, files), file.path(tmp, knitr:::sub_ext(files, 'f90')), overwrite=TRUE)
 files <- list.files(tmp, pattern='*.f90')
 out <- file.path(TMPDIR, 'ifort.so')
+for (f in files) {
+  system2('ifort', args=c('-O3','-fpic','-c', f, '-o', knitr:::sub_ext(f, 'o')))
+}
 cat('FC=ifort\nF77=ifort\n', file='Makevars')
-system2('R', args=c('CMD SHLIB','-o', out,  files), env=c('R_MAKEVARS_USER=Makevars', 'PKG_FCFLAGS=-O3'))
+system2('R', args=c('CMD SHLIB','-o', out,  files), env=c('R_MAKEVARS_USER=Makevars'))
+file.size(out)
 ```
 
 ## Templates
 
 Contents of `launcher.sh`:
 ```{r launcher_sh,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='launcher.sh',lang='bash')}
-#Rscript --no-restore prepare.R 
-Rscript --no-restore test.R $TMPDIR/gfort.so &
+Rscript --no-restore $1 $TMPDIR/$2 &
 pid=$!
 ./cpumemlog.sh $pid -o=cpumemlog.txt -t=1
 wait
-Rscript --no-restore wrapup.R gfort.so
-
-Rscript --no-restore test.R $TMPDIR/gfortO3.so &
-pid=$!
-./cpumemlog.sh $pid -o=cpumemlog.txt -t=1
-wait
-Rscript --no-restore wrapup.R gfortO3.so
-
-Rscript --no-restore test.R $TMPDIR/ifort.so &
-pid=$!
-./cpumemlog.sh $pid -o=cpumemlog.txt -t=1
-wait
-Rscript --no-restore wrapup.R ifort.so
+Rscript --no-restore wrapup.R $2
 
 ```
 
@@ -242,6 +240,28 @@ if (nrow(x) > 0) {
   dbSendPreparedQuery(dbconn, 'INSERT INTO results (jobid, type, ETIME, RSS, VSZ) VALUES (:jobid, :type, :ETIME, :RSS, :VSZ);', x)
 }
 dbDisconnect(dbconn)
+```
+
+Contents of `R.R`:
+Estimating natively in R.
+
+```{r R_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
+load('run_options.Rdata')
+
+true <- read.snps('true.txt', nlines=n, ncols=m+1, what=integer(), na=9)
+impu <- read.snps('impu.txt', nlines=n, ncols=m+1, what=numeric(), na=9)
+
+if (standardized) {
+  m <- apply(true, 2, mean, na.rm=TRUE)
+  v <- apply(true, 2, sd, na.rm=TRUE)
+  true <- scale(true, m, v)
+  impu <- scale(impu, m, v)
+}
+
+mat1 <- cor(as.vector(true), as.vector(impu), use = 'complete.obs')
+row1 <- sapply(1:nrow(true), function(i) cor(true[i,], impu[i,], use='na.or.complete'))
+col1 <- sapply(1:ncol(true), function(i) cor(true[,i], impu[,i], use='na.or.complete'))
+
 ```
 
 ## Functions
@@ -318,6 +338,23 @@ run_env$get_nlines <- function(fn, showWarning=TRUE, doError=FALSE) {
   }
   res$nlines
 }
+
+run_env$read.snps <- function(file, nlines=0, ncols=NULL, na=NA, what=integer(), extractIDs=TRUE, quiet=TRUE, ...) {
+  if (is.null(ncols) & is.character(file)) {
+    ncols <- get_ncols(file)
+  }
+  if (is.null(ncols)) stop('Cannot automagically detect number of columns to read as input file is a connection, not a character.')
+
+  M <- matrix(scan(file, nlines=nlines, what=what, quiet=quiet, ...), ncol=ncols, byrow=TRUE)
+  if (nrow(M) == 0) return(M)
+  if (extractIDs) {
+    rownames(M) <- M[,1]
+    M <- M[,-1]
+  }
+  if (!is.na(na)) M[M==na] <- NA
+  M
+}
+
 ```
 
 ## Setup database for tests
@@ -405,7 +442,11 @@ while (TRUE) {
   write.snps(true, fn1)
   write.snps(impu, fn2)
   
-  st <- system2('./launcher.sh', stdout=FALSE)
+  st <- 0
+  for (s in c('gfort.so','gfortO3.so','ifort.so')) 
+    st <- st + system2('./launcher.sh', args('test.R',s), stdout=FALSE)
+  st <- st + system2('./launcher.sh', args('R.R', 'R'), stdout=FALSE)
+  
   if (st == 0) dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=2 WHERE jobid=:jobid;', next.job)
 }
 try(dbRollback(dbconn), silent=TRUE)
