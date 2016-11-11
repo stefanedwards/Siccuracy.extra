@@ -150,7 +150,7 @@ PreprocessDataOnly			,[PREPROCESS]
 PhasingOnly				,No
 UserDefinedAlphaPhaseAnimalsFile	,None
 PrePhasedFile				,None
-BypassGeneProb				,Yes
+BypassGeneProb				,No 
 RestartOption				,[RESTART]
 '
 parse_spec <- function(specs, tpl=spec.template) {
@@ -170,6 +170,7 @@ alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
     bins <- .cached('AlphaImputev1.6.3', 'AlphaPhase','GeneProbForAlphaImpute')
   }
   file.copy(bins, getwd())
+  null <- sapply(c('GeneProb','InputFiles','IterateGeneProb','Miscellaneous','Phasing','Results'), dir.create, showWarnings=FALSE)
 
   # Manually step through each restart option.
   specs$PREPROCESS <- 'Yes'
@@ -297,17 +298,14 @@ low.densities <- c(50, 300, 1000)
 
 results <- list()
 
-cbind(res$newID[,'newID'], 0, 0) %>% write.table('Pedigree.txt',row.names=FALSE, col.names=FALSE, quote=FALSE)
-tmpdir <- tempdir()
-olddir <- setwd(tmpdir)
 cat(tmpdir, '\n', file=stderr())
+cbind(res$newID[,'newID'], 0, 0) %>% write.table('Pedigree.txt',row.names=FALSE, col.names=FALSE, quote=FALSE)
 for (ld in low.densities[1]) {
   ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
   null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
   alphaimpute(list(SNPs=hd))
   results[[as.character(ld)]] <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
 }
-setwd(olddir)
 saveRDS(res, file=.cached('imputation_accuracies.rds'))
 ```
 
