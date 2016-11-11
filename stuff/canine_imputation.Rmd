@@ -22,6 +22,7 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(Siccuracy)
+library(parallel)
 
 BASEDIR <- getwd()
 TMPDIR <- Sys.getenv('TMPDIR',tempdir())
@@ -163,9 +164,11 @@ parse_spec <- function(specs, tpl=spec.template) {
 alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
   env=paste0('OMP_NUM_THREADS=',NSLOTS)
   specs$NSLOTS <- NSLOTS
+  mc.cores <- NSLOTS
   
   if (.Platform$OS.type == 'windows') {
     bins <- .cached('AlphaImputev1.6.5.exe', 'AlphaPhase.exe','GeneProbForAlphaImpute.exe','libiomp5md.lib','libiomp5md.dll')
+    mc.cores <- 1
   } else {
     bins <- .cached('AlphaImputev1.6.3', 'AlphaPhase','GeneProbForAlphaImpute')
   }
@@ -188,7 +191,9 @@ alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
     setwd(oldwd)
     return(stat==0)
   }
-  null <- sapply(ds, geneprob)
+  #null <- sapply(ds, geneprob)
+  null <- mclapply(ds, geneprob, mc.cores=mc.cores, mc.preschedule = FALSE)
+  
   ds <- list.files(path='Phasing', pattern='Phase[0-9]+', full.names=TRUE, include.dirs = TRUE)
   phasing <- function(d) {
     cat('Phasing', basename(d), '\n', file=stderr())
@@ -199,7 +204,8 @@ alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
     setwd(oldwd)
     stat == 0
   }
-  sapply(ds, phasing)
+  #sapply(ds, phasing)
+  null <- mclapply(ds, phasing, mc.cores=mc.cores, mc.preschedule=FALSE)
   
   
   specs$PREPROCESS <- 'No'
@@ -209,7 +215,8 @@ alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
   if (stat != 0) return(structure(FALSE, msg='AlphaImpute failed on 3rd step'))
 
   ds <- list.files(path='IterateGeneProb', pattern='GeneProb[0-9]+', full.names=TRUE, include.dirs = TRUE)
-  null <- sapply(ds, geneprob)
+  null <- mclapply(ds, geneprob, mc.cores=mc.cores, mc.preschedule = FALSE)
+  
   specs$RESTART <- '4'
   parse_spec(specs, tpl)
   stat <- system2(bins[1])
