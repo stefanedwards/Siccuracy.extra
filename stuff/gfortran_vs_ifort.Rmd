@@ -459,9 +459,17 @@ try(dbRollback(dbconn), silent=TRUE)
 
 Completion status, summarised on standardized and adaptive parameters.
 
+```{r include=FALSE}
+dbconn <- dbConnect(RSQLite::SQLite(), .results('results.sqlite'))
+```
+
 ```{r results='as.is'}
 dbGetQuery(dbconn, 'SELECT * FROM view_jobs;') %>%
   kable()
+
+my_theme <- theme_bw() + theme(strip.background=element_blank(),
+                               panel.border=element_blank(), axis.line.x=element_line(), axis.line.y=element_line())
+theme_set(my_theme)
 ```
 
 
@@ -558,7 +566,7 @@ How many time series do we have of each replicate?
 #  group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
 #  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
 dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type FROM view_results;') %>%
-  distinct(n, m, st♦andardized, adaptive, replicate, type) %>% 
+  distinct(n, m, standardized, adaptive, replicate, type) %>% 
   group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
   filter(types == 4) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
 view <- data.frame(n=20000, m=30000)
@@ -582,6 +590,35 @@ dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m;', view) %>%
   labs(title=paste(view$m, 'markers'), x='# Individuals', colour='Compiler') + theme(axis.title.y=element_blank())
 ```
 
+
+## Compare speed
+
+```{r}
+p <- dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m AND standardized="TRUE";', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
+  mutate(ETIME=ETIME/60) %>%
+  ggplot(aes(x=n, y=ETIME, colour=type)) + geom_point(pch=1) +
+  stat_summary(fun.y=mean, geom='line') +
+  facet_wrap(~ adaptive, ncol=2, scales='free_y', labeller=labeller(adaptive=c('TRUE'="2nd implementation", 'FALSE'="'Fast' implementation"))) +
+  labs(colour='Compiler', x=sprintf('# Individuals (%s SNPs)', prettyNum(view$m, big.mark = ',')), y='Running time (min)') +
+  theme(panel.border=element_blank(), axis.line.x=element_line()) +
+  coord_cartesian(ylim=c(0,7)) +
+  scale_x_continuous(labels=function(i) prettyNum(i, big.mark=','))
+
+p$coordinates$render_axis_h <- function(scale_details, theme) {
+  abg <- ggplot2:::guide_axis(scale_details$x.major, scale_details$x.labels, 
+        "bottom", theme)
+  abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(min(scale_details$x.major), 1), c(1, 1), id.lengths = 2)
+  abg
+}
+p$coordinates$render_axis_v <- function(scale_details, theme) {
+  abg <- ggplot2:::guide_axis(scale_details$y.major, scale_details$y.labels, 
+        "left", theme)
+  abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(1,1), c(min(scale_details$y.major, 0.05), 1), id.lengths = 2)
+  abg
+}  
+p
+```
 
 # Code preamble
 
