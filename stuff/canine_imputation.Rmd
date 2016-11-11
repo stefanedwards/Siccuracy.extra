@@ -1,0 +1,328 @@
+---
+title: "Canine imputation accuracy pipeline"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+author: "Stefan McKinnon Hoj-Edwards"
+output: 
+  html_document: 
+    theme: spacelab
+    toc: yes
+    toc_float: true
+bibliography: bibliography.bib    
+---
+
+This vignette demonstrates a simple setup for evaluating imputation with the `Siccuracy` package and AlphaImpute[@Hickey2012,Hickey2011,Kerr1996].
+It uses a downloaded plink-binary dataset of a large collection of US dogs [@Hayward2016].
+
+We will here estimate the imputation accuracy when using different low-density genotyping chips in dogs.
+In practice, we will use the downloaded dataset, mask some of the genotypes in a subset of the dogs, and try to impute them to high-denisty genotypes.
+
+```{r setup, include=FALSE}
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(Siccuracy)
+
+BASEDIR <- getwd()
+TMPDIR <- Sys.getenv('TMPDIR',tempdir())
+TASKID <- Sys.getenv('SGE_TASK_ID', 'undefined')
+suppressWarnings(TASKID <- as.integer(TASKID))
+if (is.na(TASKID)) TASKID <- 0
+SGE_JOBID <- Sys.getenv('JOB_ID', NA)
+
+
+.dot <- function(x) {
+  f <- function(..., relative=FALSE) {
+    if (relative) {
+      file.path(file.path(x, .Platform$file.sep, c(...)))
+    } else {
+      file.path(BASEDIR, x,  c(...))
+    }
+  } 
+  null <- dir.create(f(''), FALSE, TRUE)
+  return(f)
+}
+.cached <- .dot('cache_canine_imputation')
+.results <- .dot('canine_imputation_results')
+
+knitr::opts_knit$set(root.dir=TMPDIR)
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE, autodep=TRUE, 
+                      cache.path = .cached('/'), 
+                      fig.path = .results('', relative=TRUE), 
+                      fig.width=10, fig.height=7)
+
+system2 <- function(command, ..., stdout='', stderr='') {
+  if (is.null(knitr::opts_current$get('results'))) 
+    return(base::system2(command, ..., stdout=stdout, stderr=stderr))
+  .stdout=stdout
+  .stderr=stderr
+  if (stdout=='') stdout=stderr=TRUE
+  res <- base::system2(command, ..., stdout=stdout, stderr=stderr)
+  if (is.character(res)) res <- gsub('[^\b](?R)?\b', '', res, perl=TRUE) # remove backspaces.
+  if (.stdout=='') {
+    if (.stderr==TRUE | .stdout=='') cat(res, sep='\n', file=stderr())
+    if (knitr::opts_current$get('results') == 'asis') {
+      cat(knitr::knit_hooks$get('output')(c(res, '\n'), knitr::opts_current$get()), file=stdout())
+    } else {
+      cat(res, sep='\n', file=stdout())
+    }
+    stat <- attr(res, 'status')
+    if (is.null(stat)) stat <- 0
+    attr(stat, 'errmsg') <- attr(res, 'errmsg')
+    attr(stat, 'status') <- stat
+    res <- stat
+  } else if (.stdout==FALSE) {
+    attr(res, 'status') <- res
+  }
+  if (is.null(attr(res, 'status'))) attr(res, 'status') <- 0
+  invisible(res)
+}
+
+
+```
+
+
+# Preparations
+
+We start by downloading the dataset, stored at the Dryad repository [@dryad_266k4].
+
+```{r download_data}
+if (!file.exists(.cached('cornell_canine.fam')))
+  download.file('http://datadryad.org/bitstream/handle/10255/dryad.104772/cornell_canine.fam?sequence=1', destfile=.cached('cornell_canine.fam'), quiet=TRUE)
+if (!file.exists(.cached('cornell_canine.bim')))
+  download.file('http://datadryad.org/bitstream/handle/10255/dryad.104773/cornell_canine.bim?sequence=1', destfile=.cached('cornell_canine.bim'), quiet=TRUE)
+if (!file.exists(.cached('cornell_canine.bed')))
+  download.file('http://datadryad.org/bitstream/handle/10255/dryad.104774/cornell_canine.bed?sequence=1', destfile=.cached('cornell_canine.bed'), quiet=TRUE, mode='wb')
+
+#Number of dogs -- fails because first column is not numeric.
+try(get_nlines(.cached('cornell_canine.fam')))
+length(get_firstcolumn(.cached('cornell_canine.fam'), class='character'))
+
+# Number of SNPs
+get_nlines(.cached('cornell_canine.bim'))
+```
+
+Setup software. Download AlphaImpute from http://www.alphagenes.roslin.ed.ac.uk/alphasuite-softwares/alphaimpute/
+* **Windows** http://www.alphagenes.roslin.ed.ac.uk/download/alphaimpute1-6-windows/?wpdmdl=2982
+* **Linux** http://www.alphagenes.roslin.ed.ac.uk/download/alphaimpute1-3-linux-2/?wpdmdl=2978 (["cluster"" version](http://www.alphagenes.roslin.ed.ac.uk/download/alphaimpute1-6-linux-clusters/?wpdmdl=2976))
+* **Mac** http://www.alphagenes.roslin.ed.ac.uk/download/alphaimpute1-6-macosx/?wpdmdl=2980
+
+Unpack to `r .cached('')` and modify below code to match `AlphaImputeSpec.txt` and filenames.
+
+```{r alphaimputesetup,echo=FALSE}
+spec.template <- '= BOX 1: Input Files ==========================================================
+PedigreeFile				,Pedigree.txt
+GenotypeFile				,InputGeno.txt
+TrueGenotypeFile			,None
+= BOX 2: Sex Chromosome ========================================================
+SexChrom				,No
+= BOX 3: SNPs ==================================================================
+NumberSnp				,[SNPs]
+MultipleHDPanels			,0
+NumberSnpxChip                          ,0,0
+HDAnimalsThreshold			,0.0
+= BOX 4: Internal Editing =======================================================
+InternalEdit				,No
+EditingParameters			,0.0,0.0,0.0,AllSnpOut
+= BOX 5: Phasing ================================================================
+NumberPhasingRuns			,6
+CoreAndTailLengths			,200,250,300,325,400,410
+CoreLengths				,100,150,200,225,300,310
+PedigreeFreePhasing			,No
+GenotypeError				,0.0
+NumberOfProcessorsAvailable		,[NSLOTS]
+LargeDatasets                           ,No,200,1
+= BOX 6: Imputation =========================================================
+InternalIterations			,5
+ConservativeHaplotypeLibraryUse		,No
+WellPhasedThreshold			,99.0
+= BOX 7: Hidden Markov Model ================================================
+HMMOption				,No
+TemplateHaplotypes			,200
+BurnInRounds				,5
+Rounds					,20
+ParallelProcessors			,8
+Seed					,-123456789
+ThresholdForMissingAlleles		,50.0
+ThresholdImputed			,90.0
+= BOX 8: Running options ====================================================
+PreprocessDataOnly			,[PREPROCESS]
+PhasingOnly				,No
+UserDefinedAlphaPhaseAnimalsFile	,None
+PrePhasedFile				,None
+BypassGeneProb				,Yes
+RestartOption				,[RESTART]
+'
+parse_spec <- function(specs, tpl=spec.template) {
+  for (n in names(specs)) {
+    tpl <- gsub(paste0('[',n,']'),specs[[n]], tpl, fixed=TRUE)
+  }
+  writeLines(tpl, 'AlphaImputeSpec.txt')
+}
+
+alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
+  env=paste0('OMP_NUM_THREADS=',NSLOTS)
+  specs$NSLOTS <- NSLOTS
+  
+  if (.Platform$OS.type == 'windows') {
+    bins <- .cached('AlphaImputev1.6.5.exe', 'AlphaPhase.exe','GeneProbForAlphaImpute.exe','libiomp5md.lib','libiomp5md.dll')
+  } else {
+    bins <- .cached('AlphaImputev1.6.3', 'AlphaPhase','GeneProbForAlphaImpute')
+  }
+  file.copy(bins, getwd())
+
+  # Manually step through each restart option.
+  specs$PREPROCESS <- 'Yes'
+  specs$RESTART <- '1'
+  parse_spec(specs, tpl)
+  stat <- system2(bins[1], env=env)
+  if (stat != 0) return(structure(FALSE, msg='AlphaImpute failed on 1st step'))
+  
+  ds <- list.files(path='GeneProb', pattern='GeneProb[0-9]+', full.names=TRUE, include.dirs = TRUE)
+  geneprob <- function(d) {
+    cat('Running GeneProbs', basename(d), '\n', file=stderr())
+    if (file.exists(file.path(d, 'GpDone.txt'))) return(TRUE)
+    oldwd <- setwd(d)
+    stat <- system2(bins[3], stdout='GeneProbOut.txt')
+    setwd(oldwd)
+    return(stat==0)
+  }
+  null <- sapply(ds, geneprob)
+  ds <- list.files(path='Phasing', pattern='Phase[0-9]+', full.names=TRUE, include.dirs = TRUE)
+  phasing <- function(d) {
+    cat('Phasing', basename(d), '\n', file=stderr())
+    oldwd <- setwd(d)
+    dir.create('PhasingResults')
+    dir.create('Miscellaneous')
+    stat <- system2(bins[2], stdout='AlphaPhaseOut.txt', stderr='AlphaPhaseErr.txt')
+    setwd(oldwd)
+    stat == 0
+  }
+  sapply(ds, phasing)
+  
+  
+  specs$PREPROCESS <- 'No'
+  specs$RESTART <- '3'
+  parse_spec(specs, tpl)
+  stat <- system2(bins[1])
+  if (stat != 0) return(structure(FALSE, msg='AlphaImpute failed on 3rd step'))
+
+  ds <- list.files(path='IterateGeneProb', pattern='GeneProb[0-9]+', full.names=TRUE, include.dirs = TRUE)
+  null <- sapply(ds, geneprob)
+  specs$RESTART <- '4'
+  parse_spec(specs, tpl)
+  stat <- system2(bins[1])
+  if (stat != 0) return(structure(FALSE, msg='AlphaImpute failed on 4th step'))
+
+}
+```
+
+# Get to work
+
+## 1. Convert PLINK binary file to  AlphaImpute format
+
+Note that this does not require us to call PLINK.
+
+Imputation works best when applied to each chromosome separatly, so we will extract the first chromosome:
+
+```{r convert_chr1,eval=!file.exists(.cached('cornell_canine_chr01.txt')),include=TRUE,cache.extra=tools::md5sum(.cached('cornell_canine.bed'))}
+res <- convert_plink(.cached('cornell_canine'), .cached('cornell_canine_chr01.txt'), method='lowmem', extract_chr='1', countminor = FALSE)
+sum(res$extract) # How many SNPs were extracted?
+get_ncols(res$fnout)
+```
+```{r include=FALSE}
+if (is.na(unlist(mget('res', ifnotfound = NA)))) {
+  res <- convert_plink(.cached('cornell_canine'), .cached('cornell_canine_chr01.txt'), method='dryrun', extract_chr='1', countminor = FALSE)
+  # dryrun just goes through the motions without actually reading/writing the files. From here, we get res$newID, res$extract, etc.
+}
+```
+
+The `method='lowmem'` splits the input file into chromosomes (by default, change with `fragments` argument, and thus avoids loading the entire input file into memory at once.
+
+The returned result also contains a mapping between the two-column sample names and the integer-based names required for AlphaImpute:
+```{r}
+head(res$newID)
+```
+
+If we wished to extract all chromosomes separately, the following code block could be used.
+
+```{r eval=FALSE}
+outfn <- .cached('cornell_canine.txt')
+chrfn <- function(i) .cached(sprintf('cornell_canine_chr%02i.txt', i))
+res <- convert_plink(.cached('cornell_canine'), outfn, method='lowmem', fragmentfns = chrfn, remerge=FALSE)
+```
+
+The `chrfn` function is used for the `fragmentfns` argument to generate the filenames of each chromosome. 
+If `fragmentfns` is not given `tempfile()` is used to generate temporary filenames, and these are part of the returned value.
+`remerge` is set to `FALSE` as the chromosomes would otherwise be merged into a single file of an impressive 1.29 GB.
+
+As an alternate, we could use the following codeblock, 
+but notice the second command as we need to strip off the first 6 columns of the output file,
+replace the double-columns with numeric identifiers, and replace missing genotypes from \code{NA} to e.g. \code{9}.
+
+```{r eval=FALSE}
+for (i in 1:39) {
+  tmp <- tempfile()
+  system2('../tools/plink.exe',c('-bfile',.cached('cornell_canine'), '--chr', i, '--dog','--recode A', '--out', tmp))
+  res <- convert_plinkA(paste0(tmp, '.raw'), .cached(sprintf('cornell_canine_chr%02i.raw', i)))
+}
+```
+
+If the SNPs should be restricted to, say, a minimal allele frequencies > 0.05, both \code{convert_plink} and \code{PLINK} does this.
+
+## 2. Select HD and LD dogs
+
+As there is little information in the downloaded data set, we select at random 1000 dogs that we simulate are 
+genotyped with HD chips.
+
+```{r select_dogs}
+hd.dogs <- sample(res$newID$newID, 1000, replace=FALSE)
+ld.dogs <- setdiff(res$newID$newID, hd.dogs)
+```
+
+
+## 3. Simulate high- and low-density genotyping
+
+We will focus on imputing chromosome 1. How big is it?
+
+```{r}
+(hd <- get_ncols(res$fnout)-1) # why minus one? First column is ID column.
+(hd <- sum(res$extract))
+```
+
+We further decide to test three different densities for the low-density SNP chip.
+
+```{r genotype}
+low.densities <- c(50, 300, 1000)
+
+results <- list()
+
+cbind(res$newID[,'newID'], 0, 0) %>% write.table('Pedigree.txt',row.names=FALSE, col.names=FALSE, quote=FALSE)
+tmpdir <- tempdir()
+olddir <- setwd(tmpdir)
+cat(tmpdir, '\n', file=stderr())
+for (ld in low.densities[1]) {
+  ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
+  null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
+  alphaimpute(list(SNPs=hd))
+  results[[as.character(ld)]] <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
+}
+setwd(olddir)
+saveRDS(res, file=.cached('imputation_accuracies.rds'))
+```
+
+# Code preamble and session info
+
+The following code block is executed in the very beginning of the script.
+```{r setup,eval=FALSE}
+```
+
+## AlphaImpute setup
+```{r alphaimputesetup,eval=FALSE}
+```
+
+## Session Info
+
+```{r sessionInfo}
+sessionInfo()
+```
