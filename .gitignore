@@ -33,6 +33,8 @@ lib/
 *.utf8.md
 *.knit.md
 .Rproj.user
+*.o[0-9]*
+*.po[0-9]*
 
 # Fortran output
 *.o
