@@ -137,7 +137,6 @@ dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
   if (is(res, 'try-error')) stop(res)
   res
 }
-
 ```
 
 ```{r echo=FALSE,eval=!.do.computations,results='asis'}
@@ -220,8 +219,6 @@ Contents of `wrapup.R`:
 
 ```{r wrapup_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
 library(RSQLite, quietly=TRUE)
-#library(dplyr)
-#library(tidyr)
 
 load('run_options.Rdata')
 
@@ -246,7 +243,7 @@ dbDisconnect(dbconn)
 Contents of `R.R`:
 Estimating natively in R.
 
-```{r R_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='wrapup.R',lang='R')}
+```{r R_R,eval=.do.computations,cache=FALSE,engine='cat',engine.opts=list(file='R.R',lang='R')}
 load('run_options.Rdata')
 
 true <- read.snps('true.txt', nlines=n, ncols=m+1, what=integer(), na=9)
@@ -415,7 +412,7 @@ system2('chmod', c('u+x', 'cpumemlog.sh','launcher.sh'))
 
 while (TRUE) {
   dbBegin(dbconn)
-  next.job <- dbGetQuery(dbconn, 'SELECT * FROM jobs WHERE status=0 LIMIT 1;')
+  next.job <- dbGetQuery(dbconn, 'SELECT * FROM jobs WHERE status=0 ORDER BY replicate ASC LIMIT 1;')
   if (nrow(next.job) == 0) break
   next.job$sge <- SGE_JOBID
   dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=1, SGE_JOBID=:sge WHERE jobid=:jobid;', next.job)
@@ -444,9 +441,10 @@ while (TRUE) {
   write.snps(impu, fn2)
   
   st <- 0
-  for (s in c('gfort.so','gfortO3.so','ifort.so')) 
-    st <- st + system2('./launcher.sh', args('test.R',s), stdout=FALSE)
-  st <- st + system2('./launcher.sh', args('R.R', 'R'), stdout=FALSE)
+  for (s in c('gfort.so','gfortO3.so','ifort.so'))  {
+    st <- st + system2('./launcher.sh', args=c('test.R',s), stdout=FALSE)
+  }
+  st <- st + system2('./launcher.sh', args=c('R.R', 'R'), stdout=FALSE)
   
   if (st == 0) dbSendPreparedQuery(dbconn, 'UPDATE jobs SET status=2 WHERE jobid=:jobid;', next.job)
 }
@@ -459,17 +457,9 @@ try(dbRollback(dbconn), silent=TRUE)
 
 Completion status, summarised on standardized and adaptive parameters.
 
-```{r include=FALSE}
-dbconn <- dbConnect(RSQLite::SQLite(), .results('results.sqlite'))
-```
-
 ```{r results='as.is'}
 dbGetQuery(dbconn, 'SELECT * FROM view_jobs;') %>%
   kable()
-
-my_theme <- theme_bw() + theme(strip.background=element_blank(),
-                               panel.border=element_blank(), axis.line.x=element_line(), axis.line.y=element_line())
-theme_set(my_theme)
 ```
 
 
@@ -486,10 +476,10 @@ dbGetQuery(dbconn, 'SELECT n, standardized, adaptive, count(jobid) as total, sum
 
 ```{r deconstruct_results_by_type}
 dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, type, ETIME FROM view_results;') %>%
-  group_by(n, m, standardized, adaptive, type) %>% top_n(1, ETIME) %>% 
-  ggplot(aes(x=as.factor(n), fill=type)) + geom_bar(position='dodge') + 
-  facet_grid(adaptive ~ standardized, labeller=label_both) +
-  coord_flip() + labs(x='Animals (`n`)', colour='Type')
+  group_by(n, m, standardized, adaptive, type) %>% top_n(1, ETIME) %>% summarise(no=n()) %>% 
+  ggplot(aes(x=1, y=no, fill=type)) + geom_bar(stat='identity', position='dodge') + 
+  facet_grid(adaptive + n ~ standardized + m) +
+  coord_polar() + theme(axis.title=element_blank(), axis.text=element_blank(), axis.ticks=element_blank())
 ```
 
 ## Explorative results
@@ -549,7 +539,7 @@ dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FR
 ```{r}
 dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FROM view_results;') %>%
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, RSS) %>%
-  ggplot(aes(x=n, y=RSS, colour=type)) + geom_point(pch=1) +
+  ggplot(aes(x=n, y=RSS, colour=type)) + geom_point() +
   facet_grid(adaptive ~ standardized, scales='free_y', labeller=label_both)
 ```
 
@@ -562,20 +552,16 @@ dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type, RSS FR
 
 How many time series do we have of each replicate?
 ```{r}
-#dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
-#  group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
-#  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
-dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, replicate, type FROM view_results;') %>%
-  distinct(n, m, standardized, adaptive, replicate, type) %>% 
+dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
   group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
-  filter(types == 4) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
-view <- data.frame(n=20000, m=30000)
+  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+view <- data.frame(n=20000, m=20000)
 ```
 
 ```{r}
 dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE n=:n;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
-  gather(stat, val, ETIME, RSS, VSZ) %>% #filter(adaptive=='TRUE', standardized=='TRUE', stat=='VSZ', type!='gfortO3.so') %>% #filter(type=='gfort.so', adaptive=='TRUE', standardized=='TRUE') %>% View
+  gather(stat, val, ETIME, RSS, VSZ) %>%
   ggplot(aes(x=m, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
   facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
   labs(title=paste(view$n, 'individuals'), x='# Markers', colour='Compiler') + theme(axis.title.y=element_blank())
@@ -584,41 +570,12 @@ dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE n=:n;', view) %>%
 ```{r}
 dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
-  gather(stat, val, ETIME, RSS, VSZ) %>% 
+  gather(stat, val, ETIME, RSS, VSZ) %>%
   ggplot(aes(x=n, y=val, colour=type)) + stat_summary(fun.y=mean, geom='line') +  geom_point(pch=1) +
   facet_grid(adaptive+stat ~ standardized, scales='free_y', labeller=labeller(standardized=label_both, adaptive=label_both)) +
   labs(title=paste(view$m, 'markers'), x='# Individuals', colour='Compiler') + theme(axis.title.y=element_blank())
 ```
 
-
-## Compare speed
-
-```{r}
-p <- dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m AND standardized="TRUE";', view) %>% 
-  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME)  %>%# gets last observation; latter two do not decrease.
-  mutate(ETIME=ETIME/60) %>%
-  ggplot(aes(x=n, y=ETIME, colour=type)) + geom_point(pch=1) +
-  stat_summary(fun.y=mean, geom='line') +
-  facet_wrap(~ adaptive, ncol=2, scales='free_y', labeller=labeller(adaptive=c('TRUE'="2nd implementation", 'FALSE'="'Fast' implementation"))) +
-  labs(colour='Compiler', x=sprintf('# Individuals (%s SNPs)', prettyNum(view$m, big.mark = ',')), y='Running time (min)') +
-  theme(panel.border=element_blank(), axis.line.x=element_line()) +
-  coord_cartesian(ylim=c(0,7)) +
-  scale_x_continuous(labels=function(i) prettyNum(i, big.mark=','))
-
-p$coordinates$render_axis_h <- function(scale_details, theme) {
-  abg <- ggplot2:::guide_axis(scale_details$x.major, scale_details$x.labels, 
-        "bottom", theme)
-  abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(min(scale_details$x.major), 1), c(1, 1), id.lengths = 2)
-  abg
-}
-p$coordinates$render_axis_v <- function(scale_details, theme) {
-  abg <- ggplot2:::guide_axis(scale_details$y.major, scale_details$y.labels, 
-        "left", theme)
-  abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(1,1), c(min(scale_details$y.major, 0.05), 1), id.lengths = 2)
-  abg
-}  
-p
-```
 
 # Code preamble
 
