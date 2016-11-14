@@ -307,13 +307,13 @@ results <- list()
 
 cat(tmpdir, '\n', file=stderr())
 cbind(res$newID[,'newID'], 0, 0) %>% write.table('Pedigree.txt',row.names=FALSE, col.names=FALSE, quote=FALSE)
-for (ld in low.densities[1]) {
+for (ld in low.densities) {
   ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
   null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
   alphaimpute(list(SNPs=hd))
   results[[as.character(ld)]] <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
 }
-saveRDS(res, file=.cached('imputation_accuracies.rds'))
+saveRDS(results, file=.cached('imputation_accuracies.rds'))
 ```
 
 # Code preamble and session info
