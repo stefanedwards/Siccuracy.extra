@@ -311,9 +311,31 @@ for (ld in low.densities) {
   ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
   null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
   alphaimpute(list(SNPs=hd))
-  results[[as.character(ld)]] <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
+  ia <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
+  ia$is.ld <- 1:length(ia$means) %in% ld.pos
+  results[[as.character(ld)]] <- ia
 }
-saveRDS(results, file=.cached('imputation_accuracies.rds'))
+saveRDS(results, file=.results('imputation_accuracies.rds'))
+
+matcor <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, matcor=results[[n]]$matcor, stringsAsFactors = FALSE)))
+snpcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, colcors=results[[n]]$colcors, af=results[[n]]$means, is.hd=!results[[n]]$is.ld, stringsAsFactors = FALSE)))
+dogcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, rowcors=results[[n]]$rowcors, id=results[[n]]$rowID, stringsAsFactors = FALSE)))
+
+```
+
+# Results 
+
+```{r}
+dogcors %>% filter(id %in% ld.dogs) %>%
+  mutate(ld=factor(ld, levels=low.densities)) %>%
+  ggplot(aes(x=ld, y=rowcors, group=id)) + geom_line() + geom_point() 
+```
+
+```{r}
+snpcors %>%
+  mutate(ld=factor(ld, levels=low.densities)) %>%
+  ggplot(aes(x=af, y=colcors)) + geom_point() +
+  facet_wrap(~ld)
 ```
 
 # Code preamble and session info
