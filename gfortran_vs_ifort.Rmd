@@ -212,7 +212,7 @@ load('run_options.Rdata')
 args <- commandArgs(TRUE)
 dyn.load(args[1])
 
-imputation_accuracy('true.txt','impu.txt', nSNPs=m, nAnimals=n, standardized=standardized, adaptive=adaptive)
+imputation_accuracy('true.txt','impu.txt', ncol=m, nlines=n, standardized=standardized, adaptive=adaptive)
 ```
 
 Contents of `wrapup.R`:
@@ -324,8 +324,7 @@ run_env$imputation_accuracy <- function(truefn, imputefn, ncol=NULL, nlines=NULL
                   means=as.numeric(center), sds=as.numeric(scale),  # Placeholders for return data.
                   usermeans=as.integer(usermeans),
                   rowcors=vector('numeric', n), matcor=numeric(1), colcors=vector('numeric',m),
-                  rowID=vector('integer',n),
-                  PACKAGE='Siccuracy')
+                  rowID=vector('integer',n))
 
 }
 
@@ -418,7 +417,8 @@ expand.grid(n=ns, m=ms, standardized=c('TRUE','FALSE'), adaptive=c('TRUE','FALSE
 Sys.sleep(TASKID * 10)
 run_env$dbfn <- .results('results.sqlite')
 
-file.copy(file.path(BASEDIR, '../tools/cpumemlog/cpumemlog.sh'), TMPDIR, overwrite = TRUE)
+null <- file.copy(file.path(BASEDIR, 'tools/cpumemlog/cpumemlog.sh'), TMPDIR, overwrite = TRUE)
+stopifnot(null)
 system2('chmod', c('u+x', 'cpumemlog.sh','launcher.sh'))
 
 while (TRUE) {
