@@ -20,4 +20,4 @@ module load igmm/libs/lapack/3.5.0
 module load openmpi/1.10.1
 
 export MKL_NUM_THREADS=$NSLOTS
-Rscript --vanilla -e "library('knitr'); library(rmarkdown); render('$1')"
+Rscript --no-restore -e "cat(.libPaths(), '\n'); library('knitr'); library(rmarkdown); render('$1')"
