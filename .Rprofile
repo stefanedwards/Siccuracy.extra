@@ -4,5 +4,5 @@
 if (require(devtools, quietly=TRUE)) {
   devtools::dev_mode(on=TRUE, path=file.path(add,'lib'))
 } else {
-  .libPaths(file.path(add,'lib'),.libPaths())
+  .libPaths(c(file.path(getwd(),'lib'),.libPaths()))
 }
