@@ -22,4 +22,5 @@ module load openmpi/1.10.1
 
 
 export MKL_NUM_THREADS=$NSLOTS
-Rscript --no-restore -e "library('knitr'); knit('$1')"
+export R_LIBS_SITE=/home/shojedw/R/x86_64-pc-linux-gnu-library/3.2:/exports/cmvm/eddie/eb/groups/hickey_group/shojedw/R/3.2.2:/exports/applications/apps/SL7/R/3.2.2/lib64/R/library:$R_LIBS
+Rscript --no-restore -e "cat(.libPaths(), sep='\n', '\n'); library('knitr'); knit('$1')"
