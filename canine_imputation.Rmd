@@ -311,7 +311,7 @@ for (ld in low.densities) {
   ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
   null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
   alphaimpute(list(SNPs=hd))
-  ia <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt')
+  ia <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt', standardized=TRUE)
   ia$is.ld <- 1:length(ia$means) %in% ld.pos
   results[[as.character(ld)]] <- ia
 }
@@ -320,6 +320,9 @@ saveRDS(results, file=.results('imputation_accuracies.rds'))
 matcor <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, matcor=results[[n]]$matcor, stringsAsFactors = FALSE)))
 snpcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, colcors=results[[n]]$colcors, af=results[[n]]$means, is.hd=!results[[n]]$is.ld, stringsAsFactors = FALSE)))
 dogcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, rowcors=results[[n]]$rowcors, id=results[[n]]$rowID, stringsAsFactors = FALSE)))
+
+non.stand <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt', standardized=FALSE)
+save(non.stand, ia, file=.results('standard_vs_nonstandard.RData'))
 
 ```
 
@@ -336,6 +339,19 @@ snpcors %>%
   mutate(ld=factor(ld, levels=low.densities)) %>%
   ggplot(aes(x=af, y=colcors)) + geom_point() +
   facet_wrap(~ld)
+```
+
+## Inflating by not standardizing
+
+```{r cache.extra=tools::md5sum(.results('standard_vs_nonstandard.RData'))}
+load(.results('standard_vs_nonstandard.RData'))
+
+snps <- data.frame(is.ld=ia$is.ld, standardized=ia$colcors, freq=ia$means/2, nonstandardized=non.stand$colcors) %>%
+  mutate(SNP=1:n())
+
+ggplot(snps, aes(x=nonstandardized, y=standardized, colour=is.ld)) + geom_abline(intercept=0, slope=1) + geom_point()
+snps %>% gather(stat, cor, standardized, nonstandardized) %>%
+  ggplot(aes(x=freq, cor, colour=stat)) + geom_point()
 ```
 
 # Code preamble and session info

@@ -27,6 +27,9 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(RSQLite)
+library(cowplot)
+library(grid)
+library(gridExtra)
 
 BASEDIR <- getwd()
 TMPDIR <- Sys.getenv('TMPDIR',tempdir())
@@ -136,6 +139,13 @@ dbGetPreparedQuery <- function(conn, statement, df, ..., attempts=5) {
   }
   if (is(res, 'try-error')) stop(res)
   res
+}
+
+g_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
 }
 ```
 
@@ -496,17 +506,6 @@ dbGetQuery(dbconn, 'SELECT n, m, standardized, adaptive, type, ETIME FROM view_r
 ## Explorative results
 
 ```{r}
-p <- dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>% 
-  group_by(n, m, standardized, adaptive, replicate, type) %>% summarise_each(funs(max), ETIME, RSS, VSZ) %>%
-  gather(stat, val, ETIME, RSS, VSZ) %>%
-  ggplot(aes(x=n, y=val, colour=type)) + geom_line() +
-  facet_grid(adaptive + stat ~ standardized, labeller=label_both, scales='free_y')
-p
-p %+% aes(x=m)
-  
-```
-
-```{r}
 dbGetQuery(dbconn, 'SELECT * FROM view_results;') %>% 
   group_by(n, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% 
   group_by(n, standardized, adaptive, type) %>% summarise_each(funs(mean), m, ETIME, RSS, VSZ) %>% 
@@ -565,7 +564,7 @@ How many time series do we have of each replicate?
 ```{r}
 dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
   group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
-  filter(types == 3) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+  filter(types == 4) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
 view <- data.frame(n=20000, m=20000)
 ```
 
@@ -587,6 +586,130 @@ dbGetPreparedQuery(dbconn, 'SELECT * FROM view_results WHERE m=:m;', view) %>%
   labs(title=paste(view$m, 'markers'), x='# Individuals', colour='Compiler') + theme(axis.title.y=element_blank())
 ```
 
+# Publication
+
+```{r}
+pub.theme <- theme_bw() + theme(panel.border=element_blank(), axis.line.x=element_line(), axis.line.y=element_line(), legend.key=element_blank(), strip.background=element_blank(), strip.text=element_text(size=rel(1)))
+
+# p$coordinates$render_axis_h
+h_axis_open_right <- function(p) {
+  p$coordinates$render_axis_h <-  function(scale_details, theme) {
+    abg <- ggplot2:::guide_axis(scale_details$x.major, scale_details$x.labels, 
+          "bottom", theme)
+    abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(min(scale_details$x.major), 1), c(1, 1), id.lengths = 2)
+    abg
+  }
+  p
+}
+v_axis_open_top <- function(p) {
+  p$coordinates$render_axis_v <- function(scale_details, theme) {
+    abg <- ggplot2:::guide_axis(scale_details$y.major, scale_details$y.labels, 
+          "left", theme)
+    abg$children[[1]] <- ggplot2:::element_render(theme, "axis.line.x", c(1,1), c(min(scale_details$y.major, 0.05), 1), id.lengths = 2)
+    abg
+  }
+  p
+}
+minutes <- function(x) {x/60}
+thousands <- function(x) prettyNum(x, big.mark=',')
+type.scale <- scale_colour_hue('Compiler:', breaks=c('R','gfort.so','gfortO3.so','ifort.so'), labels=c('R','gfort','gfort (O3)','ifort (O3)'))
+fct.labeller <- labeller(adaptive=c('TRUE'='Adaptive','FALSE'='Non-adaptive'), standardized=c('TRUE'='Standardized','FALSE'='Not standardized'))
+se <- function(x, ...) {sd(x, ...)/sum(!is.na(x))}
+nn <- function(x) {sum(!is.na(x))}
+```
+
+How many time series do we have of each replicate?
+```{r}
+dbGetQuery(dbconn, 'SELECT DISTINCT n, m, standardized, adaptive, replicate, type FROM view_results;') %>% 
+  group_by(n, m) %>% summarise(types=length(unique(type)), no=n()) %>% ungroup %>%
+  filter(types == 4) %>% mutate(max(no)) %>% arrange(desc(n), desc(m))
+view <- data.frame(n=20000, m=20000)
+```
+
+```{r}
+dbGetQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE m=30000 AND n=20000;') %>%
+  group_by(n, m, adaptive, standardized, replicate, type) %>% top_n(1, ETIME) %>% 
+  mutate(RSS=RSS/1024) %>%
+  group_by(adaptive, standardized, type) %>% summarise_each(funs(mean, se, nn), ETIME, RSS)
+```
+
+## Speed of Fortran compiled in non-standardized
+
+```{r}
+pm <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE standardized="FALSE" and adaptive="FALSE" AND m=:m;', view) %>% 
+  group_by(n, m, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
+  mutate(ETIME=ETIME/60) %>%
+  ggplot(aes(x=n, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_y_continuous('Elapsed time (min)') + 
+  scale_x_continuous(labels=thousands) + type.scale +
+  labs(x='Individuals (`n`)', title=paste0(thousands(view$m),' SNPs')) +
+  coord_cartesian(ylim=c(0,5)) + 
+  pub.theme + theme(legend.position='hidden')
+#p %>%  v_axis_open_top %>% h_axis_open_right
+pn <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE standardized="FALSE" and adaptive="FALSE" AND n=:n;', view) %>% 
+  group_by(n, m, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
+  mutate(ETIME=ETIME/60) %>%
+  ggplot(aes(x=m, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_y_continuous('Elapsed time (min)') + scale_x_continuous(labels=thousands) + 
+  labs(x='SNPs (`m`)', title=paste0(thousands(view$n),' individuals')) +
+  coord_cartesian(ylim=c(0,5)) + 
+  pub.theme + theme(legend.position='hidden')
+#p %>%  v_axis_open_top %>% h_axis_open_right
+legend <- g_legend(pm + theme(legend.position='bottom'))
+plot_grid((pm+theme(plot.title=element_text(size=rel(1)))) %>% v_axis_open_top %>% h_axis_open_right, 
+          (pn+theme(plot.title=element_text(size=rel(1)), axis.text.y=element_blank(), axis.title.y=element_blank(), axis.line.y=element_blank(), axis.ticks.y=element_blank())) %>% h_axis_open_right, 
+          labels='AUTO', label_size=12, align='h') %>%
+  grid.arrange(top=textGrob('Time to calculate correlation', gp=ggplot2:::element_render(pub.theme, 'plot.title')$gp), bottom=legend$grobs[[1]])
+```
+
+
+## Speed of non-adaptive vs. adaptive
+
+```{r}
+p <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE type != "R" AND m=:m;', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
+  mutate(ETIME=ETIME/60) %>%
+  ggplot(aes(x=n, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_y_continuous('Elapsed time (min)') + 
+  scale_x_continuous(labels=thousands) + type.scale +
+  labs(x='Individuals (`n`)', title=paste0('Time to calculate correlation: ', thousands(view$m),' SNPs')) +
+  facet_grid(standardized~adaptive, labeller=fct.labeller, switch='y', scales='free_y') +
+  pub.theme + theme(legend.position='bottom')
+p %>% v_axis_open_top %>% h_axis_open_right
+```
+
+## Memory usage
+
+```{r}
+p <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE type != "R" AND m=:m AND RSS > 0;', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
+  ggplot(aes(x=n, y=RSS/1024, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_x_continuous(labels=thousands) + type.scale +
+  labs(x='Individuals (`n`)', y='Resident Set Size (MB)', title=paste0('Memory usage for calculating correlation: ', thousands(view$m),' SNPs')) +
+  facet_grid(adaptive~standardized, labeller=fct.labeller, switch='y', scales='free_y') +
+  pub.theme + theme(legend.position='bottom')
+p %>% v_axis_open_top %>% h_axis_open_right
+```
+
+
+
+```{r}
+p <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE type != "R" AND n=:n AND RSS > 0;', view) %>% 
+  group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
+  #filter(adaptive=="TRUE", standardized=="FALSE", type=="ifort.so", m==10000)
+  ggplot(aes(x=m, y=RSS/1024, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_x_continuous(labels=thousands) + type.scale +
+  labs(x='SNPs (`m`)', y='Resident Set Size (MB)', title=paste0('Memory usage for calculating correlation: ', thousands(view$n),' individuals')) +
+  facet_grid(adaptive~standardized, labeller=fct.labeller, switch='y', scales='free_y') +
+  pub.theme + theme(legend.position='bottom')
+p %>% v_axis_open_top %>% h_axis_open_right
+```
+
+```{r eval=FALSE, include=FALSE}
+# Some non-standardized, adaptive ifort compiled results have very low memory usages
+dbGetQuery(dbconn, 'SELECT * FROM view_results WHERE n=20000 AND adaptive="TRUE" and RSS < 1000*1024 AND type="ifort.so";') %>%
+group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% View
+```
 
 # Code preamble
 
