@@ -1,24 +1,42 @@
-PedigreeFile,Pedigree.txt
-GenotypeFile				,Genotype.txt
-SexChrom				,No
-NumberSnp				,[NUMBEROFSNP]
-InternalEdit				,No
-EditingParameters			,0.0,0.0,0.0,AllSnpOut
-NumberPhasingRuns			,4
-CoreAndTailLengths			,400,700,1000,1500
-CoreLengths				,350,600,900,1400
-PedigreeFreePhasing			,No
-GenotypeError				,0.0
-NumberOfProcessorsAvailable		,8
-InternalIterations			,2
-PreprocessDataOnly			,[PREPROCESSONLY]
-PhasingOnly				,No
-ConservativeHaplotypeLibraryUse		,No
-WellPhasedThreshold			,99.0
-UserDefinedAlphaPhaseAnimalsFile	,None
-PrePhasedFile				,None
-BypassGeneProb				,[BYPASS]
-RestartOption				,[RESTART]
-HMMOption				,No    
-HmmParameters				,50,5,10,8,-123456789
-TrueGenotypeFile			,None 
+= BOX 1: Input Files ================================================================
+PedigreeFile                ,Pedigree.txt
+GenotypeFile                ,Genotype.txt
+TrueGenotypeFile            ,None        
+= BOX 2: Sex Chromosome =============================================================
+SexChrom                    ,No
+= BOX 3: SNPs =======================================================================
+NumberSnp                   ,[NUMBEROFSNP]
+MultipleHDPanels            ,0
+NumberSnpxChip              ,0,0
+HDAnimalsThreshold          ,90
+= BOX 4: Internal Editing ===========================================================
+InternalEdit                ,Yes
+EditingParameters           ,95.0,1.0,99.0,EditedSnpOut
+= BOX 5: Phasing ====================================================================
+NumberPhasingRuns           ,4
+CoreAndTailLengths          ,300,350,400,450
+CoreLengths                 ,250,300,350,400
+PedigreeFreePhasing         ,No
+GenotypeError               ,0.0
+NumberOfProcessorsAvailable ,4
+= BOX 6: Imputation =================================================================
+InternalIterations          ,3
+ConservativeHaplotypeLibraryUse     ,No
+WellPhasedThreshold         ,99.0
+= BOX 7: Hidden Markov Model ========================================================
+HMMOption                   ,No
+TemplateHaplotypes          ,10
+BurnInRounds                ,5
+Rounds                      ,1000
+ParallelProcessors          ,12,
+Seed                        ,-123456789
+PhasedAnimalsThreshold      ,1.0
+WellImputedThreshold        ,99.0
+= BOX 8: Running options ============================================================
+PreprocessDataOnly          ,No
+PhasingOnly                 ,No
+UserDefinedAlphaPhaseAnimalsFile    ,None
+PrePhasedFile               ,None
+BypassGeneProb              ,No
+RestartOption               ,0
+
