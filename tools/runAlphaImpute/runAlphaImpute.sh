@@ -6,7 +6,8 @@ BINDIR=~/Code/Tools/bin/mac
 WORKDIR=$(pwd)
 if [[ $HOSTNAME == node*  ]]; then  # #grepl('login[0-9]*.ecdf.ed.ac.uk', HOSTNAME))
   # Eddie3!
-  BINDIR=/exports/cmvm/datastore/eb/groups/hickey_group/Programs/AlphaImpute/v1.3.2
+  #BINDIR=/exports/cmvm/datastore/eb/groups/hickey_group/Programs/AlphaImpute/v1.3.2
+  BINDIR=$WORKDIR
   WORKDIR=TMPDIR
   export PATH=$PATH:/exports/cmvm/eddie/eb/groups/hickey_group/shojedw/bin # For nicey parallel 
 fi
@@ -319,15 +320,15 @@ fi
 
 # Read Spec file
 IFS=$'\n' read -d '' -r -a speclines < $specfile
-IFS=' ,' read -r -a pedigreeline <<< ${speclines[0]}
+IFS=' ,' read -r -a pedigreeline <<< ${speclines[1]}
 test $verbose -ge 1 && echo "Picked up pedigree file: ${pedigreeline[1]}."
-IFS=' ,' read -r -a genotypeline <<< ${speclines[1]}
+IFS=' ,' read -r -a genotypeline <<< ${speclines[2]}
 test $verbose -ge 1 && echo "Picked up genotype file: ${genotypeline[1]}."
-IFS=' ,' read -r -a phasedanimalsline <<< ${speclines[17]}
+IFS=' ,' read -r -a phasedanimalsline <<< ${speclines[37]}
 test $verbose -ge 1 && echo "Picked up UserDefinedAlphaPhaseAnimalsFile file: ${phasedanimalsline[1]}."
-IFS=' ,' read -r -a phasingline <<< ${speclines[18]}
+IFS=' ,' read -r -a phasingline <<< ${speclines[38]}
 test $verbose -ge 1 && echo "Picked up PrePhasedFile file: ${phasingline[1]}."
-IFS=' ,' read -r -a trueline <<< ${speclines[23]}
+IFS=' ,' read -r -a trueline <<< ${speclines[3]}
 test $verbose -ge 1 && echo "Picked up TrueGenotypeFile file: ${trueline[1]}."
 
 
@@ -340,6 +341,10 @@ fi
 if [ -z "$phasedanim" ]; then
   phasedanim=${phasedanimalsline[1]}
 fi
+if [ "${phasingline[1]}" == 'No' ]; then
+  echo "Correcting PrephasedFiled."
+  phasefile=None
+fi
 if [ -z "$phasefile" ]; then
   phasefile=${phasingline[1]}
 fi
@@ -348,7 +353,7 @@ if [ -z "$trues" ]; then
 fi
 
 
-IFS=' ,' read -r -a ncpuline <<< ${speclines[11]}
+IFS=' ,' read -r -a ncpuline <<< ${speclines[20]}
 test $verbose -ge 2 && echo "Picked up number of processors from specfile: ${ncpuline[1]}."
 if [ $ncpu -eq 0 ]; then
   ncpu=$NSLOTS
@@ -411,30 +416,48 @@ ncol=$(( ncol - 1 ))
 
 
 make_spec() {
+  echo "${speclines[0]}"
   echo "PedigreeFile ,$pedigree" 
   echo "GenotypeFile ,$genotype" 
-  echo "${speclines[2]}"
+  echo "TrueGenotypeFile ,$trues"
+  echo "${speclines[4]}"
+  echo "${speclines[5]}"
+  echo "${speclines[6]}"
   echo "NumberSnp ,$ncol"
-  echo "${speclines[4]}" 
-  echo "${speclines[5]}" 
-  echo "${speclines[6]}" 
-  echo "${speclines[7]}" 
   echo "${speclines[8]}" 
   echo "${speclines[9]}" 
   echo "${speclines[10]}" 
-  echo "NumberOfProcessorsAvailable ,$ncpu" 
+  echo "${speclines[11]}" 
   echo "${speclines[12]}" 
-  echo "PreprocessDataOnly ,$1" 
+  echo "${speclines[13]}" 
   echo "${speclines[14]}" 
   echo "${speclines[15]}" 
   echo "${speclines[16]}" 
+  echo "${speclines[17]}" 
+  echo "${speclines[18]}" 
+  echo "${speclines[19]}" 
+  echo "NumberOfProcessorsAvailable ,$ncpu" 
+  echo "${speclines[21]}" 
+  echo "${speclines[22]}" 
+  echo "${speclines[23]}" 
+  echo "${speclines[24]}" 
+  echo "${speclines[25]}" 
+  echo "${speclines[26]}" 
+  echo "${speclines[27]}" 
+  echo "${speclines[28]}" 
+  echo "${speclines[29]}" 
+  echo "${speclines[30]}" 
+  echo "${speclines[31]}" 
+  echo "${speclines[32]}" 
+  echo "${speclines[33]}" 
+  echo "${speclines[34]}" 
+  echo "PreprocessDataOnly ,$1" 
+  echo "${speclines[36]}"  
   echo "UserDefinedAlphaPhaseAnimalsFile ,$phasedanim" 
   echo "PrePhasedFile ,$phasefile" 
   echo "BypassGeneProb ,$2"  
-  echo "RestartOption ,$3"  
-  echo "${speclines[21]}" 
-  echo "${speclines[22]}" 
-  echo "TrueGenotypeFile, $trues" 
+  echo "RestartOption ,$3"
+  echo ""  
 }  
 export -f make_spec
   
@@ -447,7 +470,7 @@ fi
 
 
 # Finally, get binaries if possible.
-alphaimp='AlphaImputev1.3.2'
+alphaimp='AlphaImputev1.5.5'
 geneprob='GeneProbForAlphaImpute'
 alphaphas='AlphaPhase1.1'
 if [ ! -z $BINDIR ]; then
@@ -588,3 +611,5 @@ if [ "${save[0]}" != 'None' ]; then
 		parallel -j $NSLOTS rsync -r $WORKDIR/{}/ $savedir/{} ::: ${save[@]}  
   fi
 fi
+
+
