@@ -1,3 +1,4 @@
 [submodule "Siccuracy"]
 	path = Siccuracy
 	url = https://github.com/stefanedwards/Siccuracy.git
+	branch = Siccuracy.extra
