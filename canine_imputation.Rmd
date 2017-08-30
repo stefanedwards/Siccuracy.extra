@@ -21,8 +21,10 @@ library(knitr)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(grid)
 library(Siccuracy)
 library(parallel)
+library(lemon)
 
 BASEDIR <- getwd()
 TMPDIR <- Sys.getenv('TMPDIR',tempdir())
@@ -30,19 +32,17 @@ TASKID <- Sys.getenv('SGE_TASK_ID', 'undefined')
 suppressWarnings(TASKID <- as.integer(TASKID))
 if (is.na(TASKID)) TASKID <- 0
 SGE_JOBID <- Sys.getenv('JOB_ID', NA)
+NSLOTS <- Sys.getenv('NSLOTS')
+suppressWarnings(NSLOTS <- as.integer(NSLOTS))
+if (is.na(NSLOTS)) NSLOTS <- 1
 
-
-.dot <- function(x) {
-  f <- function(..., relative=FALSE) {
-    if (relative) {
-      file.path(file.path(x, .Platform$file.sep, c(...)))
-    } else {
-      file.path(BASEDIR, x,  c(...))
-    }
-  } 
-  null <- dir.create(f(''), FALSE, TRUE)
-  return(f)
+.cat <- function(...) {
+  v <- c(...)
+  val <- unlist(mget(v,envir = globalenv(), ifnotfound='<>'))
+  cat(paste0(v,': ',val), sep='\n', file=stderr())
 }
+.cat('BASEDIR','TMPDIR','TASKID','NSLOTS','SGE_JOBID')
+
 .cached <- .dot('cache_canine_imputation')
 .results <- .dot('canine_imputation_results')
 
@@ -161,7 +161,7 @@ parse_spec <- function(specs, tpl=spec.template) {
   writeLines(tpl, 'AlphaImputeSpec.txt')
 }
 
-alphaimpute <- function(specs, tpl=spec.template, NSLOTS=1) {
+alphaimpute <- function(specs, tpl=spec.template) {
   env=paste0('OMP_NUM_THREADS=',NSLOTS)
   specs$NSLOTS <- NSLOTS
   mc.cores <- NSLOTS
@@ -300,48 +300,122 @@ We will focus on imputing chromosome 1. How big is it?
 
 We further decide to test three different densities for the low-density SNP chip.
 
-```{r genotype}
+```{r run_imputation,eval=FALSE}
 low.densities <- c(50, 300, 1000)
 
 results <- list()
 
-cat(tmpdir, '\n', file=stderr())
 cbind(res$newID[,'newID'], 0, 0) %>% write.table('Pedigree.txt',row.names=FALSE, col.names=FALSE, quote=FALSE)
 for (ld in low.densities) {
   ld.pos <- sample.int(hd, hd-ld, replace=FALSE)
-  null <- mask_SNPs(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
+  null <- mask_snp_file(res$fnout, 'InputGeno.txt', maskIDs=ld.dogs, maskSNPs=ld.pos, ncol=hd)
   alphaimpute(list(SNPs=hd))
+  file.copy('InputGeno.txt', .cached(paste0('InputGeno_',ld,'.txt')), overwrite=TRUE)
+  file.copy('Results/ImputeGenotypeProbabilities.txt', .cached(paste0('Imputed_',ld,'.txt')), overwrite=TRUE)
   ia <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt', standardized=TRUE)
   ia$is.ld <- 1:length(ia$means) %in% ld.pos
   results[[as.character(ld)]] <- ia
 }
 saveRDS(results, file=.results('imputation_accuracies.rds'))
 
+non.stand <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt', standardized=FALSE)
+save(non.stand, hd.dogs, ld.dogs, ia, file=.results('standard_vs_nonstandard.RData'))
+```
+```{r include=FALSE}
+if (is.na(unlist(mget(c('results','non.stand'), ifnotfound = NA)))) {
+  results <- readRDS(.results('imputation_accuracies.rds'))
+  load(.results('standard_vs_nonstandard.RData'))
+  low.densities <- c(50, 300, 1000)
+}
+```
+```{r}
 matcor <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, matcor=results[[n]]$matcor, stringsAsFactors = FALSE)))
 snpcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, colcors=results[[n]]$colcors, af=results[[n]]$means, is.hd=!results[[n]]$is.ld, stringsAsFactors = FALSE)))
-dogcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, rowcors=results[[n]]$rowcors, id=results[[n]]$rowID, stringsAsFactors = FALSE)))
-
-non.stand <- imputation_accuracy(res$fnout, 'Results/ImputeGenotypeProbabilities.txt', standardized=FALSE)
-save(non.stand, ia, file=.results('standard_vs_nonstandard.RData'))
+dogcors <- do.call(bind_rows, lapply(names(results), function(n) data.frame(ld=n, rowcors=results[[n]]$rowcors, id=results[[n]]$rowID, stringsAsFactors = FALSE))) %>%
+  mutate(is.ld=id %in% ld.dogs)
 
 ```
 
 # Results 
 
-```{r}
-dogcors %>% filter(id %in% ld.dogs) %>%
-  mutate(ld=factor(ld, levels=low.densities)) %>%
-  ggplot(aes(x=ld, y=rowcors, group=id)) + geom_line() + geom_point() 
+```{r include=FALSE}
+pub.theme <- theme_bw() + theme(panel.border=element_blank(), axis.line.x=element_line(), axis.line.y=element_line(), legend.key=element_blank(), 
+                                strip.background=element_blank(), strip.text=element_text(size=rel(1)),
+                                panel.grid=element_line(colour='grey'))
+theme_set(pub.theme)
 ```
 
 ```{r}
-snpcors %>%
+p <- dogcors %>% 
   mutate(ld=factor(ld, levels=low.densities)) %>%
-  ggplot(aes(x=af, y=colcors)) + geom_point() +
-  facet_wrap(~ld)
+  ggplot(aes(x=ld, y=rowcors, group=id)) + geom_line(colour=grey(0.8)) + geom_point(pch=1) +
+  labs(x='Low-density', y='Animal imputation correlation') +
+  facet_rep_wrap(~is.ld, labeller=labeller(is.ld=c('FALSE'='HD genotyped dogs','TRUE'='Imputed dogs'))) +
+  coord_capped_cart(left='top', bottom='both')
+
+
+p$facet <- structure(list(shrink = TRUE), .Names = "shrink", class = c("null", 
+"facet"))
+(p %+% filter(p$data, is.ld==TRUE)) 
 ```
 
-## Inflating by not standardizing
+```{r}
+dogcors %>% group_by(ld, is.ld) %>% summarise_each(funs(mean, first=quantile(., probs=0.25), third=quantile(., probs=0.75)), rowcors)
+```
+
+```{r}
+p <- dogcors %>% mutate(ld=paste0('ld_',ld)) %>%
+  spread(ld, rowcors) %>% 
+  mutate('50 %->% 300'=ld_300-ld_50, '50 %->% 1000'=ld_1000-ld_50, '300 %->% 1000'=ld_1000-ld_300) %>% 
+  gather('x','increase', contains('%->%')) %>% 
+  ggplot(aes(x=increase)) + geom_histogram(binwidth=0.01) +
+  facet_rep_wrap(~x, ncol=1, labeller=label_parsed) +
+  coord_cartesian(ylim=c(0,250)) +
+  labs(x='Increase in animal imputation accuracy') +
+  coord_capped_cart(bottom='left', left='bottom')
+```
+
+## Compare inputted and imputed genotypes of non-masked dogs
+
+```{r}
+f1 <- sapply(c(res$fnout, .cached('InputGeno_50.txt','Imputed_50.txt')), get_firstcolumn)
+all(f1[,1]==f1[,2])
+all(f1[,1]==f1[,3])
+
+hd.dogs2 <- get_firstcolumn(.cached('InputGeno_50.txt'), class=c('integer','integer'), col.names=c('ID','snp1'))
+hd.dogs2 <- hd.dogs2$ID[hd.dogs2$snp1 != 9]
+
+non.imputed <- imputation_accuracy(res$fnout, .cached('InputGeno_50.txt'), standardized = FALSE, adaptive = FALSE)
+imp.input <- imputation_accuracy(.cached('InputGeno_50.txt'), .cached('Imputed_50.txt'), standardized = FALSE, adaptive = FALSE)
+
+plot(non.imputed$rowcors[hd.dogs2], main='Correlation of non-masked dogs', ylab='Correlation')
+mtext('True genotypes and input genotypes', side = 3, line = 0.5)
+plot(imp.input$rowcors[hd.dogs2], main='Correlation of non-masked dogs', ylab='Correlation')
+mtext('Input genotypes and resulting imputed genotypes', side = 3, line = 0.5)
+```
+
+Plot of difference between input genotypes and resulting imputed genotypes for non-masked dogs.
+SNPs are located horizontally, dogs vertically. Grey colour denotes no difference between input and imputed; white and black denotes deviations.
+```{r}
+imputed <- read.snps(.cached('Imputed_50.txt'), what=numeric())[hd.dogs2,]
+inputed <- read.snps(.cached('InputGeno_50.txt'), what=numeric())[hd.dogs2,]
+grid.raster(scales::rescale(imputed-inputed, from=c(-1,1)), interpolate=FALSE, height=unit(1, 'npc'))
+```
+
+## SNP correlations
+
+```{r}
+p <- snpcors %>% filter(is.hd==FALSE) %>%
+  mutate(ld=factor(ld, levels=low.densities)) %>%
+  ggplot(aes(x=af/2, y=colcors)) + geom_point(pch=1) +
+  labs(y='SNP correlation', x='Allele frequency') +
+  facet_rep_wrap(~ld) +
+  coord_capped_cart(bottom='both', left='top')
+```
+
+## Inflation by not standardizing
+
+SNP correlations
 
 ```{r cache.extra=tools::md5sum(.results('standard_vs_nonstandard.RData'))}
 load(.results('standard_vs_nonstandard.RData'))
@@ -352,6 +426,24 @@ snps <- data.frame(is.ld=ia$is.ld, standardized=ia$colcors, freq=ia$means/2, non
 ggplot(snps, aes(x=nonstandardized, y=standardized, colour=is.ld)) + geom_abline(intercept=0, slope=1) + geom_point()
 snps %>% gather(stat, cor, standardized, nonstandardized) %>%
   ggplot(aes(x=freq, cor, colour=stat)) + geom_point()
+```
+
+Animal correlations
+
+```{r}
+non.stand <- imputation_accuracy(res$fnout, .cached('Imputed_50.txt'), standardized=FALSE, adaptive=FALSE)
+yes.stand <- imputation_accuracy(res$fnout, .cached('Imputed_50.txt'), standardized=TRUE, adaptive=FALSE)
+
+p <- 
+inner_join(
+  with(non.stand, data.frame(ncor=rowcors, id=rowID, stringsAsFactors=FALSE)),
+  with(yes.stand, data.frame(ycor=rowcors, id=rowID, stringsAsFactors=FALSE))
+) %>%
+  mutate(is.ld=id %in% ld.dogs) %>%
+  ggplot(aes(x=ycor, y=ncor, colour=is.ld)) + geom_abline(slope=1, intercept=0) + geom_point() +
+  labs(x='Dog correlation, when standardized', y='Dog correlation, when not standardized', colour='Dog is masked') +
+  theme(legend.position='bottom') + 
+  coord_capped_cart(c(-0.15,1), c(-0.15,1), bottom='top', right='right' ) 
 ```
 
 # Code preamble and session info

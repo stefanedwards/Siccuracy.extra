@@ -612,7 +612,10 @@ v_axis_open_top <- function(p) {
 }
 minutes <- function(x) {x/60}
 thousands <- function(x) prettyNum(x, big.mark=',')
-type.scale <- scale_colour_hue('Compiler:', breaks=c('R','gfort.so','gfortO3.so','ifort.so'), labels=c('R','gfort','gfort (O3)','ifort (O3)'))
+tp.br <- c('R','gfort.so','gfortO3.so','ifort.so')
+tp.lbl <- c('R','gfort','gfort (O3)','ifort (O3)')
+type.col.scale <- scale_colour_hue('Compiler:', breaks=tp.br, labels=tp.lbl)
+type.sh.scale <- scale_shape('Compiler:', breaks=tp.br, labels=tp.lbl, solid=TRUE)
 fct.labeller <- labeller(adaptive=c('TRUE'='Adaptive','FALSE'='Non-adaptive'), standardized=c('TRUE'='Standardized','FALSE'='Not standardized'))
 se <- function(x, ...) {sd(x, ...)/sum(!is.na(x))}
 nn <- function(x) {sum(!is.na(x))}
@@ -639,19 +642,19 @@ dbGetQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME,
 pm <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE standardized="FALSE" and adaptive="FALSE" AND m=:m;', view) %>% 
   group_by(n, m, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
   mutate(ETIME=ETIME/60) %>%
-  ggplot(aes(x=n, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  ggplot(aes(x=n, y=ETIME, colour=type, shape=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
   scale_y_continuous('Elapsed time (min)') + 
-  scale_x_continuous(labels=thousands) + type.scale +
+  scale_x_continuous(labels=thousands) + type.col.scale + type.sh.scale +
   labs(x='Individuals (`n`)', title=paste0(thousands(view$m),' SNPs')) +
   coord_cartesian(ylim=c(0,5)) + 
   pub.theme + theme(legend.position='hidden')
-#p %>%  v_axis_open_top %>% h_axis_open_right
 pn <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE standardized="FALSE" and adaptive="FALSE" AND n=:n;', view) %>% 
   group_by(n, m, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
   mutate(ETIME=ETIME/60) %>%
-  ggplot(aes(x=m, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  ggplot(aes(x=m, y=ETIME, colour=type, shape=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
   scale_y_continuous('Elapsed time (min)') + scale_x_continuous(labels=thousands) + 
   labs(x='SNPs (`m`)', title=paste0(thousands(view$n),' individuals')) +
+  type.col.scale + type.sh.scale +
   coord_cartesian(ylim=c(0,5)) + 
   pub.theme + theme(legend.position='hidden')
 #p %>%  v_axis_open_top %>% h_axis_open_right
@@ -669,9 +672,9 @@ plot_grid((pm+theme(plot.title=element_text(size=rel(1)))) %>% v_axis_open_top %
 p <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE type != "R" AND m=:m;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
   mutate(ETIME=ETIME/60) %>%
-  ggplot(aes(x=n, y=ETIME, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  ggplot(aes(x=n, y=ETIME, colour=type, shape=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
   scale_y_continuous('Elapsed time (min)') + 
-  scale_x_continuous(labels=thousands) + type.scale +
+  scale_x_continuous(labels=thousands) + type.col.scale + type.sh.scale +
   labs(x='Individuals (`n`)', title=paste0('Time to calculate correlation: ', thousands(view$m),' SNPs')) +
   facet_grid(standardized~adaptive, labeller=fct.labeller, switch='y', scales='free_y') +
   pub.theme + theme(legend.position='bottom')
@@ -683,8 +686,8 @@ p %>% v_axis_open_top %>% h_axis_open_right
 ```{r}
 p <- dbGetPreparedQuery(dbconn, 'SELECT n, m, adaptive, standardized, replicate, type, ETIME, RSS, VSZ FROM view_results WHERE type != "R" AND m=:m AND RSS > 0;', view) %>% 
   group_by(n, m, standardized, adaptive, replicate, type) %>% top_n(1, ETIME) %>% # gets last observation;
-  ggplot(aes(x=n, y=RSS/1024, colour=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
-  scale_x_continuous(labels=thousands) + type.scale +
+  ggplot(aes(x=n, y=RSS/1024, colour=type, shape=type)) + stat_summary(fun.y=mean, geom='line') + geom_point() + 
+  scale_x_continuous(labels=thousands) + type.col.scale + type.sh.scale +
   labs(x='Individuals (`n`)', y='Resident Set Size (MB)', title=paste0('Memory usage for calculating correlation: ', thousands(view$m),' SNPs')) +
   facet_grid(adaptive~standardized, labeller=fct.labeller, switch='y', scales='free_y') +
   pub.theme + theme(legend.position='bottom')
